@@ -1,0 +1,46 @@
+{
+  "run_id": "draft",
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "description": "Provide deterministic greeting behavior",
+      "status": "PENDING"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "requirement_id": "REQ-1",
+      "description": "Greeting tests pass",
+      "verification": {
+        "type": "command",
+        "command": "npm test",
+        "expected_exit_code": 0
+      },
+      "mandatory": true,
+      "risk": "low"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-1",
+      "type": "implementation",
+      "title": "Implement greeting and tests",
+      "status": "READY",
+      "priority": "normal",
+      "risk": "low",
+      "origin": "initial_plan",
+      "depends_on": [],
+      "requirement_ids": ["REQ-1"],
+      "acceptance_ids": ["AC-1"],
+      "scope_paths": ["src/greeting.ts", "tests/greeting.test.ts"],
+      "required_outputs": ["code", "test"],
+      "worker_role": "implementer",
+      "capability_profile": "portable",
+      "attempt": 0,
+      "max_attempts": 3,
+      "verification_commands": ["npm test"],
+      "review_policy": "required"
+    }
+  ]
+}

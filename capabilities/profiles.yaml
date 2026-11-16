@@ -1,0 +1,7 @@
+profiles:
+  portable:
+    skills: []
+  openspec:
+    extends: portable
+    requires:
+      - openspec-cli

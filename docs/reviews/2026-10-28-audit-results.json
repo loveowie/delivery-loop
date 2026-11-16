@@ -1,0 +1,229 @@
+[
+  {
+    "case": "default final review",
+    "repo": "/var/folders/4f/4hy2vr_51db8bscpw0g22_xr0000gn/T/delivery-audit-case-82C3nX",
+    "first": [
+      [
+        "TASK-1",
+        "DONE"
+      ],
+      [
+        "FINAL-REVIEW",
+        "READY"
+      ]
+    ],
+    "second": [
+      [
+        "TASK-1",
+        "DONE"
+      ],
+      [
+        "FINAL-REVIEW",
+        "FIX_REQUIRED"
+      ],
+      [
+        "FIX-6af34710f6",
+        "READY"
+      ]
+    ],
+    "error": [
+      {
+        "event_id": "c4783eb5-cf13-4f81-a983-430ca552dd86",
+        "timestamp": "2026-10-28T06:01:23.904Z",
+        "type": "fix_required",
+        "task_id": "FINAL-REVIEW",
+        "origin": "test_failure",
+        "fingerprint": "9eece8ba8b05d8035e4649ce3593ba726a205ad7f850f1ed09e45683a7f6066c"
+      }
+    ],
+    "roles": [
+      "implementer",
+      "reviewer"
+    ]
+  },
+  {
+    "case": "crash recovery existing worktree",
+    "status": "READY",
+    "attempt": 0,
+    "error": "Error: git worktree add --detach /var/folders/4f/4hy2vr_51db8bscpw0g22_xr0000gn/T/delivery-audit-case-GySfJB/.delivery/runs/run-1/worktrees/TASK-1-attempt-0 f16931c860643748967227e37962135e5e6c484d failed: Preparing worktree (detached HEAD f16931c)\nfatal: '/var/folders/4f/4hy2vr_51db8bscpw0g22_xr0000gn/T/delivery-audit-case-GySfJB/.delivery/runs/run-1/worktrees/TASK-1-attempt-0' already exists\n"
+  },
+  {
+    "case": "repair loses failed implementation and context",
+    "debuggerHasImplementation": false,
+    "requests": [
+      {
+        "role": "implementer",
+        "objective": "Implement approved feature",
+        "context_files": [
+          "AGENTS.md"
+        ],
+        "keys": [
+          "run_id",
+          "task_id",
+          "role",
+          "capability_profile",
+          "required_skills",
+          "objective",
+          "workdir",
+          "requirement_ids",
+          "acceptance_ids",
+          "scope_paths",
+          "constraints",
+          "verification_commands",
+          "context_files",
+          "timeout_seconds"
+        ]
+      },
+      {
+        "role": "debugger",
+        "objective": "Implement approved feature",
+        "context_files": [
+          "AGENTS.md"
+        ],
+        "keys": [
+          "run_id",
+          "task_id",
+          "role",
+          "capability_profile",
+          "required_skills",
+          "objective",
+          "workdir",
+          "requirement_ids",
+          "acceptance_ids",
+          "scope_paths",
+          "constraints",
+          "verification_commands",
+          "context_files",
+          "timeout_seconds"
+        ]
+      }
+    ]
+  },
+  {
+    "case": "snapshot changes during integration export",
+    "status": "COMPLETED",
+    "persistedSnapshot": "SNAP-cb3ed503063e",
+    "actualSnapshot": "SNAP-d7c0d69860af",
+    "equal": false,
+    "statusPorcelain": " A src/new.txt\n"
+  },
+  {
+    "case": "queue deadlock with no running owner",
+    "states": [
+      [
+        "run-2",
+        "QUEUED"
+      ],
+      [
+        "run-3",
+        "QUEUED"
+      ]
+    ]
+  },
+  {
+    "case": "acceptance without evidence",
+    "graphValidation": {
+      "ok": true,
+      "errors": [],
+      "value": {
+        "run_id": "r",
+        "tasks": [
+          {
+            "id": "TASK-1",
+            "type": "implementation",
+            "title": "Implement approved feature",
+            "status": "DONE",
+            "priority": "normal",
+            "risk": "low",
+            "origin": "initial_plan",
+            "depends_on": [],
+            "requirement_ids": [
+              "REQ-1"
+            ],
+            "acceptance_ids": [],
+            "scope_paths": [
+              "src"
+            ],
+            "required_outputs": [],
+            "worker_role": "implementer",
+            "capability_profile": "portable",
+            "attempt": 0,
+            "max_attempts": 3,
+            "verification_commands": [],
+            "review_policy": "none"
+          }
+        ],
+        "requirements": [
+          {
+            "id": "REQ-1",
+            "description": "Important feature",
+            "status": "PENDING"
+          }
+        ],
+        "acceptance": []
+      }
+    },
+    "acceptance": {
+      "status": "PASSED",
+      "reasons": []
+    }
+  },
+  {
+    "case": "verification writes outside workspace",
+    "result": "passed",
+    "outsideFile": "outside write"
+  },
+  {
+    "case": "failed worker token budget bypass",
+    "actualReportedTokens": 200,
+    "persistedTokens": 0,
+    "budget": 50,
+    "runStatus": "RUNNING",
+    "taskAttempt": 2
+  },
+  {
+    "case": "human decision resume",
+    "pendingStateKeys": [
+      "state_schema_version",
+      "run_id",
+      "status",
+      "repo_root",
+      "baseline_commit",
+      "created_at",
+      "updated_at",
+      "config",
+      "graph",
+      "current_task_ids",
+      "pause_requested",
+      "pending_decision_ids",
+      "pending_decision_tasks"
+    ],
+    "workerCalls": 1,
+    "error": "Error: git worktree add --detach /var/folders/4f/4hy2vr_51db8bscpw0g22_xr0000gn/T/delivery-audit-case-BvytAA/.delivery/runs/run-1/worktrees/TASK-1-attempt-0 c6bc4e3aaff7a546ecf8ae53d1718e44b14a551f failed: Preparing worktree (detached HEAD c6bc4e3)\nfatal: '/var/folders/4f/4hy2vr_51db8bscpw0g22_xr0000gn/T/delivery-audit-case-BvytAA/.delivery/runs/run-1/worktrees/TASK-1-attempt-0' already exists\n"
+  },
+  {
+    "case": "per-task acceptance invalidated without rerun",
+    "runStatus": "RUNNING",
+    "fixTasks": [
+      {
+        "id": "FIX-a5fda53892",
+        "acceptance_ids": [],
+        "verification_commands": [],
+        "title": "Implement approved feature"
+      }
+    ],
+    "evidence": [
+      {
+        "task_id": "TASK-1",
+        "command": "node -e \"process.exit(0)\"",
+        "snapshot": "SNAP-e622204cf7ff"
+      },
+      {
+        "task_id": "TASK-1",
+        "command": "node -e \"process.exit(0)\"",
+        "snapshot": "SNAP-e622204cf7ff"
+      }
+    ],
+    "finalSnapshot": "SNAP-52487d7f52ce"
+  }
+]

@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "planner",
+        "implementer",
+        "test_author",
+        "debugger",
+        "reviewer",
+        "acceptance"
+      ]
+    },
+    "capability_profile": {
+      "type": "string",
+      "enum": [
+        "portable",
+        "openspec"
+      ]
+    },
+    "required_skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skill_id": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "tree_sha256": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "skill_id",
+          "root",
+          "entry",
+          "sha256",
+          "resources"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workdir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirement_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "acceptance_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scope_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verification_commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "context_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "specification": {
+          "type": "string"
+        },
+        "requirements": {
+          "type": "array",
+          "items": {}
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {}
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "decision_id": {
+                "type": "string"
+              },
+              "response": {
+                "type": "string"
+              },
+              "answered_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "decision_id",
+              "response",
+              "answered_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "failure": {}
+      },
+      "required": [
+        "specification",
+        "requirements",
+        "acceptance",
+        "decisions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "role",
+    "capability_profile",
+    "required_skills",
+    "objective",
+    "workdir",
+    "requirement_ids",
+    "acceptance_ids",
+    "scope_paths",
+    "constraints",
+    "verification_commands",
+    "context_files",
+    "timeout_seconds"
+  ],
+  "additionalProperties": false
+}

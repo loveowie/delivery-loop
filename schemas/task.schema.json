@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "spec",
+              "implementation",
+              "test",
+              "bugfix",
+              "refactor",
+              "integration",
+              "verification",
+              "documentation",
+              "review_fix"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "READY",
+              "RUNNING",
+              "VERIFYING",
+              "REVIEWING",
+              "INTEGRATING",
+              "FIX_REQUIRED",
+              "INTERRUPTED",
+              "DONE",
+              "BLOCKED",
+              "CANCELLED"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "initial_plan",
+              "test_failure",
+              "review_finding",
+              "acceptance_gap",
+              "user_change"
+            ]
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requirement_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acceptance_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_outputs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "code",
+                "test",
+                "documentation",
+                "migration",
+                "configuration"
+              ]
+            }
+          },
+          "worker_role": {
+            "type": "string",
+            "enum": [
+              "planner",
+              "implementer",
+              "test_author",
+              "debugger",
+              "reviewer",
+              "acceptance"
+            ]
+          },
+          "capability_profile": {
+            "type": "string",
+            "enum": [
+              "portable",
+              "openspec"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "max_attempts": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "verification_commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "review_policy": {
+            "type": "string",
+            "enum": [
+              "required",
+              "risk-based",
+              "batch",
+              "none"
+            ]
+          },
+          "code_snapshot_id": {
+            "type": "string"
+          },
+          "last_failure_fingerprint": {
+            "type": "string"
+          },
+          "repairs_task_id": {
+            "type": "string"
+          },
+          "dynamic_depth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "seed_worktree": {
+            "type": "string"
+          },
+          "workspace_path": {
+            "type": "string"
+          },
+          "failure_context": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "evidence": {},
+              "findings": {
+                "type": "array",
+                "items": {}
+              }
+            },
+            "required": [
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "title",
+          "status",
+          "priority",
+          "risk",
+          "origin",
+          "depends_on",
+          "requirement_ids",
+          "acceptance_ids",
+          "scope_paths",
+          "required_outputs",
+          "worker_role",
+          "capability_profile",
+          "attempt",
+          "max_attempts",
+          "verification_commands",
+          "review_policy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SATISFIED",
+              "BLOCKED"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requirement_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "command",
+                      "test"
+                    ]
+                  },
+                  "command": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "expected_exit_code": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "type",
+                  "command",
+                  "expected_exit_code"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "artifact",
+                      "review"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "mandatory": {
+            "type": "boolean"
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "requirement_id",
+          "description",
+          "verification",
+          "mandatory",
+          "risk"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "run_id",
+    "tasks"
+  ],
+  "additionalProperties": false
+}

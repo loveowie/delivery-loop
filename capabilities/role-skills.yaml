@@ -1,0 +1,24 @@
+roles:
+  planner:
+    skills:
+      - brainstorming
+      - writing-plans
+    profile_skills:
+      openspec:
+        - openspec-explore
+        - openspec-propose
+  implementer:
+    skills:
+      - test-driven-development
+  test_author:
+    skills:
+      - test-driven-development
+  debugger:
+    skills:
+      - systematic-debugging
+      - test-driven-development
+  reviewer:
+    skills: []
+  acceptance:
+    skills:
+      - verification-before-completion

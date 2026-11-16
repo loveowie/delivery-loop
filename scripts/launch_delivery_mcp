@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+PLUGIN_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+NODE_BIN=${CODEX_MCP_NODE_PATH:-node}
+
+if ! "$NODE_BIN" -e 'const [major] = process.versions.node.split(".").map(Number); process.exit(major >= 24 ? 0 : 1)'; then
+  echo "delivery-loop requires Node.js 24 or newer" >&2
+  exit 1
+fi
+
+exec "$NODE_BIN" "$PLUGIN_ROOT/dist/index.js"

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.delivery/
+coverage/
+*.tgz
+.DS_Store
+.idea/
+release/

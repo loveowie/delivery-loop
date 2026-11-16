@@ -1,0 +1,65 @@
+version: 1
+skills:
+  brainstorming:
+    path: capabilities/vendors/superpowers/brainstorming
+    entry: SKILL.md
+    sha256: 74edf03ea6d24ef53db48677b93558d14a979bdf052ca3f57ecdca0c66791608
+    resources:
+      - visual-companion.md
+      - spec-document-reviewer-prompt.md
+      - scripts/frame-template.html
+      - scripts/helper.js
+      - scripts/server.cjs
+      - scripts/start-server.sh
+      - scripts/stop-server.sh
+  writing-plans:
+    path: capabilities/vendors/superpowers/writing-plans
+    entry: SKILL.md
+    sha256: 48508f44bbfd7d24b029fbf3a314f3cd14c9615599059366e922f47b8dc08cf2
+    resources:
+      - plan-document-reviewer-prompt.md
+  test-driven-development:
+    path: capabilities/vendors/superpowers/test-driven-development
+    entry: SKILL.md
+    sha256: bf1b8216e523851a411e91d429a7c1c2a173e79d88957bc78e348218d50edd54
+    resources:
+      - writing-good-tests.md
+  systematic-debugging:
+    path: capabilities/vendors/superpowers/systematic-debugging
+    entry: SKILL.md
+    sha256: 808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787
+    resources:
+      - condition-based-waiting.md
+      - defense-in-depth.md
+      - root-cause-tracing.md
+      - find-polluter.sh
+  verification-before-completion:
+    path: capabilities/vendors/superpowers/verification-before-completion
+    entry: SKILL.md
+    sha256: 2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3
+    resources: []
+  executing-plans:
+    path: capabilities/vendors/superpowers/executing-plans
+    entry: SKILL.md
+    sha256: c4c3d8b628c51114cd165fb8246fe02744cd8be180032328391252e653028d9b
+    resources: []
+  openspec-explore:
+    path: capabilities/vendors/openspec/explore
+    entry: SKILL.md
+    sha256: e7b53309e97e9616e323de58e59711a97001604ea457c64b6bed6ccea6b5e48c
+    resources: []
+  openspec-propose:
+    path: capabilities/vendors/openspec/propose
+    entry: SKILL.md
+    sha256: f336c80a63b4e62da1c1ef7928eb75552034dcef652dc312d09263fe67a26264
+    resources: []
+  openspec-apply-change:
+    path: capabilities/vendors/openspec/apply-change
+    entry: SKILL.md
+    sha256: ad613d2e091add16987991ca33b6c66eb648dc5f1be5fde66230b8c8b39dffc8
+    resources: []
+  openspec-archive-change:
+    path: capabilities/vendors/openspec/archive-change
+    entry: SKILL.md
+    sha256: 655ce675120860bd161b495fddc2eeba64b0d595ab1a798198dd4a4eb3d1f318
+    resources: []

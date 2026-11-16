@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delivery Loop"
+  short_description: "Run spec-to-acceptance delivery until verified or blocked"
+  default_prompt: "使用 $deliver-change 从需求澄清开始，持续开发、自测、修复、评审和验收，直到交付完成。"

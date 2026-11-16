@@ -1,0 +1,55 @@
+[
+  {
+    "case": "final verifier changes accepted source without snapshot refresh",
+    "runStatus": "COMPLETED",
+    "publishedSnapshot": "SNAP-60c3ca285bff",
+    "actualSnapshot": "SNAP-25fc4db1bb5a",
+    "snapshotsMatch": false,
+    "finalContent": "changed by final verification"
+  },
+  {
+    "case": "failed integration candidate remains published",
+    "sourceTask": "FIX_REQUIRED",
+    "publishedSnapshot": "SNAP-ac690e22919f",
+    "integrationContent": "unverified candidate\n"
+  },
+  {
+    "case": "staged out of scope change omitted by scope guard",
+    "runStatus": "COMPLETED",
+    "sourceTask": "DONE",
+    "workerStatus": "A  outside-scope.txt\n M src/base.txt\n",
+    "integratedOutsideScope": false
+  },
+  {
+    "case": "global always review overridden by task none",
+    "runStatus": "COMPLETED",
+    "roles": [
+      "implementer"
+    ]
+  },
+  {
+    "case": "expected nonzero exit cannot satisfy acceptance",
+    "exitCode": 2,
+    "evidenceResult": "failed",
+    "acceptance": {
+      "status": "FAILED",
+      "reasons": [
+        "acceptance AC-1 has no current passing evidence"
+      ]
+    }
+  },
+  {
+    "case": "worker result identity and self-reported usage trusted",
+    "requestedTask": "TASK-1",
+    "returnedTask": "OTHER-TASK",
+    "status": "completed",
+    "measuredUsage": 999,
+    "returnedUsage": 0
+  },
+  {
+    "case": "abort returns before process group exits",
+    "resultStatus": "failed",
+    "summary": "codex exec exited with code 130",
+    "processStillAlive": true
+  }
+]

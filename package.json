@@ -1,0 +1,52 @@
+{
+  "name": "delivery-loop",
+  "version": "0.1.0",
+  "description": "Generic end-to-end software delivery orchestration plugin for Codex",
+  "type": "module",
+  "private": false,
+  "files": [
+    ".codex-plugin",
+    ".mcp.json",
+    "capabilities",
+    "dist",
+    "examples",
+    "schemas",
+    "scripts",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "docs/*.md",
+    "docs/design/*.md",
+    "docs/superpowers/plans/*.md",
+    "docs/implementation/*.md",
+    "docs/reviews/2026-11-03-global-implementation.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "generate:schemas": "tsx scripts/generate-schemas.ts",
+    "verify:skills": "tsx scripts/sync-vendored-skills.ts --check",
+    "update:skills": "tsx scripts/sync-vendored-skills.ts --write",
+    "test": "tsx --test tests/*.test.ts tests/**/*.test.ts",
+    "test:watch": "tsx --test --watch tests/*.test.ts tests/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "start": "node dist/index.js",
+    "test:integration": "tsx --test tests/e2e/*.test.ts tests/workspace/*real-git.test.ts tests/workers/*process*.test.ts",
+    "verify:release": "tsx scripts/verify-release.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "proper-lockfile": "^4.1.2",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/proper-lockfile": "^4.1.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT"
+}
