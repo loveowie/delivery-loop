@@ -48,10 +48,13 @@ export async function runPreflight(
   probe: CommandProbe,
   skills: SkillProvider,
   repoRoot?: string,
+  requireCodex = true,
 ): Promise<void> {
-  const codexVersion = await probe.version('codex');
-  if (codexVersion === undefined) {
-    throw new Error('codex CLI is not available on PATH');
+  if (requireCodex) {
+    const codexVersion = await probe.version('codex');
+    if (codexVersion === undefined) {
+      throw new Error('codex CLI is not available on PATH');
+    }
   }
 
   if (config.spec.provider === 'openspec') {

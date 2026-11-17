@@ -25,6 +25,10 @@ export interface RuntimeFactoryOptions {
   probe?: CommandProbe;
   gitExecutor?: (args: string[], cwd?: string, options?: GitExecutionOptions) => Promise<GitCommandResult>;
   workerAdapter?: WorkerAdapter;
+  /** Codex executable or wrapper used by the default worker adapter. */
+  codexCommand?: string;
+  /** Fail instead of falling back to the Codex adapter when no workerAdapter is supplied. */
+  requireWorkerAdapter?: boolean;
 }
 
 export interface DeliveryRuntime {
@@ -44,6 +48,9 @@ export class RuntimeFactory {
   }
 
   async create(repoRoot: string, runId: string): Promise<DeliveryRuntime> {
+    if (this.options.requireWorkerAdapter === true && this.options.workerAdapter === undefined) {
+      throw new Error('DSH subagent services are unavailable; the native delivery worker adapter is not configured');
+    }
     const store = await StateStore.open(repoRoot);
     const state = await store.readRun(runId);
     if (state === undefined) {
@@ -95,7 +102,13 @@ export class RuntimeFactory {
       },
       verifyAll: async (skills) => await verifyResolvedSkills(skills),
     };
-    await runPreflight(state.config, this.options.probe ?? new NodeCommandProbe(), runtimeSkillProvider, state.repo_root);
+    await runPreflight(
+      state.config,
+      this.options.probe ?? new NodeCommandProbe(),
+      runtimeSkillProvider,
+      state.repo_root,
+      this.options.workerAdapter === undefined,
+    );
 
     const git = new GuardedGitAdapter(
       this.options.gitExecutor ?? createNodeGitExecutor(),
@@ -135,6 +148,7 @@ export class RuntimeFactory {
       this.options.workerAdapter ??
       new CodexExecAdapter({
         schemaPath: join(this.options.pluginRoot, 'schemas', 'agent-result.schema.json'),
+        ...(this.options.codexCommand === undefined ? {} : { command: this.options.codexCommand }),
         terminationGraceMs: state.config.runtime.worker_termination_grace_seconds * 1000,
         diagnosticDirectory: join(runDirectory, 'worker-diagnostics'),
       });

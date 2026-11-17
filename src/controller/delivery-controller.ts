@@ -1,5 +1,6 @@
 import { changedSnapshotPaths } from '../workspace/repository-context.js';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { writeDeliveryReport } from '../reporting/report-writer.js';
 import { compileVerificationPlan } from './verification-planner.js';
@@ -26,6 +27,7 @@ import type { WorkerAdapter } from '../workers/worker-adapter.js';
 import type { VerificationRequest } from '../verification/command-runner.js';
 import { validateTaskGraph } from '../domain/schemas.js';
 import { missingRequiredOutputs } from './required-outputs.js';
+import { recordDecision } from './decision-journal.js';
 
 export interface SkillProvider {
   resolve(
@@ -202,6 +204,16 @@ export class DeliveryController {
         ...current.config.verification.commands.lint,
         ...current.config.verification.commands.e2e,
       ];
+      if (commands.length > 0) {
+        await recordDecision(this.options.store, {
+          run_id: runId,
+          phase: 'prepare',
+          code: 'baseline_started',
+          title: `开始基线验证（${commands.length} 条命令）`,
+          outcome: 'info',
+          data: { commands },
+        });
+      }
       for (const command of commands) {
         const evidence = await this.runVerification({
           run_id: runId,
@@ -217,7 +229,39 @@ export class DeliveryController {
         await this.evidenceLedger?.append(evidence);
         const latest = await this.requireRun(runId);
         if (latest.status === 'CANCELLED') return latest;
-        if (evidence.result === 'error') return await this.blockVerificationError(latest, evidence);
+        if (evidence.result === 'error') {
+          await recordDecision(this.options.store, {
+            run_id: runId,
+            phase: 'prepare',
+            code: 'baseline_error',
+            title: '基线验证执行错误，运行已阻塞',
+            detail: evidence.command,
+            outcome: 'blocked',
+            data: { evidence_id: evidence.id, command: evidence.command },
+          });
+          return await this.blockVerificationError(latest, evidence);
+        }
+        if (evidence.result === 'failed') {
+          await recordDecision(this.options.store, {
+            run_id: runId,
+            phase: 'prepare',
+            code: 'baseline_failed',
+            title: `基线命令失败：${evidence.command}`,
+            detail: '基线失败不阻塞启动；失败信息会作为后续任务的上下文。',
+            outcome: 'fail',
+            data: { evidence_id: evidence.id, command: evidence.command, exit_code: evidence.exit_code },
+          });
+        }
+      }
+      if (commands.length > 0) {
+        await recordDecision(this.options.store, {
+          run_id: runId,
+          phase: 'prepare',
+          code: 'baseline_passed',
+          title: '基线验证完成',
+          outcome: 'pass',
+          data: { baseline_id: baselineId, commands: commands.length },
+        });
       }
       state = { ...current, baseline_verification_id: baselineId };
     }
@@ -230,6 +274,19 @@ export class DeliveryController {
       return draft;
     });
     await this.options.store.appendEvent(runId, { type: 'run_started' });
+    await recordDecision(this.options.store, {
+      run_id: runId,
+      phase: 'lifecycle',
+      code: 'run_started',
+      title: '交付运行开始执行',
+      detail: `共 ${state.graph.tasks.length} 个任务，最大并行 ${state.config.runtime.max_parallel_workers} 个 Worker。`,
+      outcome: 'info',
+      data: {
+        baseline_commit: state.baseline_commit ?? null,
+        git_mode: state.config.git.mode,
+        profile: state.config.profile,
+      },
+    });
     return state;
   }
 
@@ -242,6 +299,14 @@ export class DeliveryController {
       state = await this.updateRun(runId, (draft) => {
         changeRun(draft, 'PAUSED');
         return draft;
+      });
+      await recordDecision(this.options.store, {
+        run_id: runId,
+        phase: 'lifecycle',
+        code: 'run_paused',
+        title: '运行已暂停',
+        detail: '当前没有新的任务被调度，恢复后从持久化状态继续。',
+        outcome: 'info',
       });
       return state;
     }
@@ -325,6 +390,22 @@ export class DeliveryController {
       return draft;
     });
     const task = state.graph.tasks.find((candidate) => candidate.id === taskId)!;
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'dispatch',
+      code: 'task_started',
+      title: `开始任务 ${taskId}`,
+      detail: `${task.title}（角色：${task.worker_role}，第 ${task.attempt + 1} 次尝试）`,
+      outcome: 'info',
+      task_id: taskId,
+      data: {
+        type: task.type,
+        role: task.worker_role,
+        risk: task.risk,
+        scope_paths: task.scope_paths,
+        depends_on: task.depends_on,
+      },
+    });
     const beforePrepareCancelled = await this.cancelTaskIfRunCancelled(state.run_id, taskId);
     if (beforePrepareCancelled !== undefined) return beforePrepareCancelled;
     const workspace = await this.options.worktrees.prepare(
@@ -355,6 +436,32 @@ export class DeliveryController {
     if ((state.total_tokens_used ?? 0) > state.config.runtime.max_total_tokens) {
       return await this.blockTaskForViolation(state, taskId, `token budget exceeded: ${state.total_tokens_used}`);
     }
+    if (result.status === 'completed') {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'execute',
+        code: 'worker_completed',
+        title: `Worker 提交结果：${taskId}`,
+        detail: result.summary,
+        outcome: 'pass',
+        task_id: taskId,
+        data: {
+          files_changed: result.files_changed.slice(0, 100),
+          findings: result.findings.length,
+          token_usage: result.token_usage ?? null,
+        },
+      });
+    } else if (result.status === 'failed') {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'execute',
+        code: 'worker_failed',
+        title: `Worker 执行失败：${taskId}`,
+        detail: result.summary,
+        outcome: 'fail',
+        task_id: taskId,
+      });
+    }
     const cancelledAfterWorker = await this.cancelTaskIfRunCancelled(state.run_id, taskId);
     if (cancelledAfterWorker !== undefined) {
       return cancelledAfterWorker;
@@ -371,6 +478,16 @@ export class DeliveryController {
         draft.current_task_ids = draft.current_task_ids.filter((id) => id !== taskId);
         changeRun(draft, 'WAITING_HUMAN');
         return draft;
+      });
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'human',
+        code: 'decision_required',
+        title: `等待人工决策：${taskId}`,
+        detail: result.summary,
+        outcome: 'waiting',
+        task_id: taskId,
+        data: { blockers: result.blockers },
       });
       return state;
     }
@@ -391,6 +508,12 @@ export class DeliveryController {
     const changedFiles = initialSnapshot.content_manifest !== undefined && snapshot.content_manifest !== undefined
       ? changedSnapshotPaths(initialSnapshot, snapshot)
       : (await this.options.snapshots.changedFiles?.(workspace.path)) ?? result.files_changed;
+    state = await this.updateRun(state.run_id, (draft) => {
+      const draftTask = draft.graph.tasks.find((candidate) => candidate.id === taskId)!;
+      draftTask.changed_files = changedFiles;
+      draftTask.last_summary = result.summary;
+      return draft;
+    });
     const outsideScope = changedFiles.filter(
       (file) =>
         task.scope_paths.length > 0 &&
@@ -421,6 +544,16 @@ export class DeliveryController {
       }
       const blocking = blockingFindings(result, state.config.review);
       if (blocking.length > 0) {
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'review',
+          code: 'review_blocking',
+          title: `独立评审发现阻塞问题：${taskId}`,
+          detail: blocking.map((finding) => `[${finding.severity}] ${finding.title}`).join('\n'),
+          outcome: 'fail',
+          task_id: taskId,
+          data: { findings: blocking },
+        });
         state = await this.updateRun(state.run_id, (draft) => {
           changeTask(draft, taskId, 'VERIFYING');
           return draft;
@@ -455,6 +588,15 @@ export class DeliveryController {
       };
       this.evidence.push(reviewEvidence);
       await this.evidenceLedger?.append(reviewEvidence);
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'review',
+        code: 'review_passed',
+        title: `独立评审通过：${taskId}`,
+        detail: result.summary,
+        outcome: 'pass',
+        task_id: taskId,
+      });
       state = await this.updateRun(state.run_id, (draft) => {
         changeTask(draft, taskId, 'VERIFYING');
         changeTask(draft, taskId, 'DONE');
@@ -471,8 +613,29 @@ export class DeliveryController {
     const failedEvidence = await this.verifyTask(state, taskId, workspace.path, snapshot.id);
     const cancelledDuringVerification = await this.cancelTaskIfRunCancelled(state.run_id, taskId);
     if (cancelledDuringVerification !== undefined) return cancelledDuringVerification;
-    if (failedEvidence?.result === 'error') return await this.blockVerificationError(state, failedEvidence, taskId);
+    if (failedEvidence?.result === 'error') {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'verify',
+        code: 'verification_error',
+        title: `验证执行错误：${failedEvidence.command}`,
+        outcome: 'blocked',
+        task_id: taskId,
+        data: { evidence_id: failedEvidence.id },
+      });
+      return await this.blockVerificationError(state, failedEvidence, taskId);
+    }
     if (failedEvidence !== undefined) {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'verify',
+        code: 'verification_failed',
+        title: `任务验证失败：${taskId}`,
+        detail: `${failedEvidence.command} 退出码 ${failedEvidence.exit_code}`,
+        outcome: 'fail',
+        task_id: taskId,
+        data: { command: failedEvidence.command, evidence_id: failedEvidence.id },
+      });
       const output = `${await safeRead(failedEvidence.stderr_path)}\n${await safeRead(failedEvidence.stdout_path)}`;
       const fingerprint = failureFingerprint({
         taskId,
@@ -490,8 +653,29 @@ export class DeliveryController {
     if (cancelledAfterVerification !== undefined) {
       return cancelledAfterVerification;
     }
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'verify',
+      code: 'verification_passed',
+      title: `任务验证通过：${taskId}`,
+      detail: task.verification_commands.length > 0
+        ? `已通过 ${task.verification_commands.length} 条验证命令。`
+        : '该任务没有配置验证命令。',
+      outcome: 'pass',
+      task_id: taskId,
+      data: { commands: task.verification_commands },
+    });
 
     if (taskRequiresReview(task, state.config)) {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'review',
+        code: 'review_requested',
+        title: `安排独立评审：${taskId}`,
+        detail: `评审策略 ${task.review_policy}，任务风险 ${task.risk}。`,
+        outcome: 'info',
+        task_id: taskId,
+      });
       state = await this.updateRun(state.run_id, (draft) => {
         changeTask(draft, taskId, 'REVIEWING');
         return draft;
@@ -531,14 +715,43 @@ export class DeliveryController {
           changeRun(draft, 'WAITING_HUMAN');
           return draft;
         });
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'human',
+          code: 'review_blocked',
+          title: `评审需要人工决策：${taskId}`,
+          detail: reviewResult.summary,
+          outcome: 'waiting',
+          task_id: taskId,
+          data: { blockers: reviewResult.blockers },
+        });
         return state;
       }
       if (reviewResult.status === 'failed') {
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'review',
+          code: 'review_failed',
+          title: `评审 Worker 执行失败：${taskId}`,
+          detail: reviewResult.summary,
+          outcome: 'fail',
+          task_id: taskId,
+        });
         state = await this.retryInterruptedTask(state, taskId, reviewResult.summary);
         return state;
       }
       const blocking = blockingFindings(reviewResult, state.config.review);
       if (blocking.length > 0) {
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'review',
+          code: 'review_blocking',
+          title: `评审发现阻塞问题：${taskId}`,
+          detail: blocking.map((finding) => `[${finding.severity}] ${finding.title}`).join('\n'),
+          outcome: 'fail',
+          task_id: taskId,
+          data: { findings: blocking },
+        });
         state = await this.updateRun(state.run_id, draft => {
           draft.graph.tasks.find(t => t.id === taskId)!.failure_context = { summary: reviewResult.summary, findings: blocking };
           return draft;
@@ -569,6 +782,15 @@ export class DeliveryController {
       };
       this.evidence.push(reviewEvidence);
       await this.evidenceLedger?.append(reviewEvidence);
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'review',
+        code: 'review_passed',
+        title: `独立评审通过：${taskId}`,
+        detail: reviewResult.summary,
+        outcome: 'pass',
+        task_id: taskId,
+      });
     }
 
     state = await this.updateRun(state.run_id, (draft) => {
@@ -635,6 +857,15 @@ export class DeliveryController {
       return (await this.cancelTaskIfRunCancelled(state.run_id, taskId)) ?? state;
     }
     if (!integrationOutcome.integration.ok || integrationOutcome.integration.workdir === undefined || integrationOutcome.integration.snapshot_id === undefined) {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'integrate',
+        code: 'integration_failed',
+        title: `集成失败：${taskId}`,
+        detail: integrationOutcome.integration.error ?? 'integration failed',
+        outcome: 'fail',
+        task_id: taskId,
+      });
       state = await this.applyFix(
         state,
         taskId,
@@ -646,6 +877,16 @@ export class DeliveryController {
     }
 
     if (integrationOutcome.failure !== undefined) {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'integrate',
+        code: 'integration_verification_failed',
+        title: `集成后验证失败：${taskId}`,
+        detail: `${integrationOutcome.failure.command} 退出码 ${integrationOutcome.failure.exit_code}`,
+        outcome: 'fail',
+        task_id: taskId,
+        data: { command: integrationOutcome.failure.command, evidence_id: integrationOutcome.failure.id },
+      });
       const output = await safeRead(integrationOutcome.failure.stderr_path);
       const fingerprint = failureFingerprint({
         taskId,
@@ -665,6 +906,20 @@ export class DeliveryController {
       return cancelledAfterIntegration;
     }
 
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'integrate',
+      code: 'integration_passed',
+      title: `集成并通过验证：${taskId}`,
+      detail: integrationOutcome.integration.snapshot_id ?? '',
+      outcome: 'pass',
+      task_id: taskId,
+      data: {
+        snapshot_id: integrationOutcome.integration.snapshot_id ?? null,
+        workdir: integrationOutcome.integration.workdir ?? null,
+        artifact: integrationOutcome.integration.artifact ?? null,
+      },
+    });
     state = await this.updateRun(state.run_id, (draft) => {
       changeTask(draft, taskId, 'DONE');
       const completedTask = draft.graph.tasks.find((candidate) => candidate.id === taskId)!;
@@ -682,6 +937,15 @@ export class DeliveryController {
       return draft;
     });
     await this.options.store.appendEvent(state.run_id, { type: 'task_done', task_id: taskId });
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'execute',
+      code: 'task_done',
+      title: `任务完成：${taskId}`,
+      detail: state.graph.tasks.find((candidate) => candidate.id === taskId)?.last_summary ?? '',
+      outcome: 'pass',
+      task_id: taskId,
+    });
     if (state.config.git.delete_worktree_on_success) {
       await workspace.cleanup();
     }
@@ -787,6 +1051,7 @@ export class DeliveryController {
     const task = state.graph.tasks.find((candidate) => candidate.id === taskId)!;
     const fingerprint = failureFingerprint({ taskId, command: origin, output: failureKey });
     let blocked = false;
+    let createdFixId: string | undefined;
     const next = await this.updateRun(state.run_id, (draft) => {
       if (draft.status === 'CANCELLED') return draft;
       const draftTask = draft.graph.tasks.find((candidate) => candidate.id === taskId)!;
@@ -812,6 +1077,7 @@ export class DeliveryController {
       draftTask.last_failure_fingerprint = fingerprint;
       draftTask.attempt += 1;
       const fix = createFixTask(draft, origin, draftTask, fingerprint);
+      createdFixId = fix.id;
       fix.seed_worktree = workspace.path;
       fix.failure_context = { summary: failureKey, ...(draftTask.failure_context ?? {}) };
       draft.current_task_ids = draft.current_task_ids.filter((id) => id !== taskId);
@@ -826,6 +1092,34 @@ export class DeliveryController {
       origin,
       fingerprint,
     });
+    if (blocked) {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'dispatch',
+        code: 'retry_budget_exhausted',
+        title: `重试或动态任务预算耗尽：${taskId}`,
+        detail: `来源 ${origin}，失败指纹 ${fingerprint}。`,
+        outcome: 'blocked',
+        task_id: taskId,
+        data: { origin, fingerprint },
+      });
+    } else {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'dispatch',
+        code: 'fix_task_created',
+        title: `创建修复任务：${createdFixId ?? '(unknown)'}`,
+        detail: `任务 ${taskId} 因 ${origin} 进入修复流程，第 ${task.attempt} 次尝试。`,
+        outcome: 'info',
+        task_id: taskId,
+        data: {
+          origin,
+          fingerprint,
+          fix_task_id: createdFixId ?? null,
+          repair_of: taskId,
+        },
+      });
+    }
     return next;
   }
 
@@ -851,6 +1145,14 @@ export class DeliveryController {
     if (state.config.review.final_review) {
       const finalReview = state.graph.tasks.find((task) => task.id === 'FINAL-REVIEW');
       if (finalReview === undefined) {
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'review',
+          code: 'final_review_requested',
+          title: '安排最终独立评审',
+          detail: '所有任务已结束，开始对整个集成快照做最终评审。',
+          outcome: 'info',
+        });
         return await this.updateRun(state.run_id, (draft) => {
           if (draft.status === 'VERIFYING') {
             changeRun(draft, 'RUNNING');
@@ -932,8 +1234,27 @@ export class DeliveryController {
         }
         await this.evidenceLedger?.append(evidence);
         this.evidence.push(evidence);
-        if (evidence.result === 'error') return await this.blockVerificationError(state, evidence);
+        if (evidence.result === 'error') {
+          await recordDecision(this.options.store, {
+            run_id: state.run_id,
+            phase: 'accept',
+            code: 'final_verification_error',
+            title: `最终验证执行错误：${check.command}`,
+            outcome: 'blocked',
+            data: { command: check.command, evidence_id: evidence.id },
+          });
+          return await this.blockVerificationError(state, evidence);
+        }
         if (evidence.result !== 'passed') {
+          await recordDecision(this.options.store, {
+            run_id: state.run_id,
+            phase: 'accept',
+            code: 'final_verification_failed',
+            title: `最终验证失败：${check.command}`,
+            detail: `退出码 ${evidence.exit_code}；将尝试创建验收修复任务。`,
+            outcome: 'fail',
+            data: { command: check.command, evidence_id: evidence.id },
+          });
           return await this.updateRun(state.run_id, (draft) => {
             if (draft.status === 'CANCELLED') return draft;
             const sources = draft.graph.tasks.filter(task => task.origin === 'initial_plan' && task.worker_role !== 'reviewer' && task.worker_role !== 'acceptance' && (check.acceptance_ids.some(id => task.acceptance_ids.includes(id)) || task.verification_commands.includes(check.command)));
@@ -958,6 +1279,15 @@ export class DeliveryController {
           });
         }
       }
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'accept',
+        code: 'final_verification_passed',
+        title: '最终验证通过',
+        detail: `集成快照 ${integrationSnapshotId} 的全部检查已通过。`,
+        outcome: 'pass',
+        data: { snapshot_id: integrationSnapshotId, commands: commands.map((check) => check.command) },
+      });
       state = await this.updateRun(state.run_id, (draft) => {
         draft.final_verification_snapshot_id = integrationSnapshotId;
         return draft;
@@ -971,6 +1301,15 @@ export class DeliveryController {
       latestSnapshot,
     );
     if (result.status === 'WAITING_HUMAN') {
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'accept',
+        code: 'acceptance_waiting_human',
+        title: '验收需要人工确认',
+        detail: result.reasons.join('\n') || '存在只能由人工确认的验收条件。',
+        outcome: 'waiting',
+        data: { reasons: result.reasons, decision_ids: state.pending_decision_ids },
+      });
       return await this.updateRun(state.run_id, (draft) => {
         changeRun(draft, 'WAITING_HUMAN');
         const decisionIds = (draft.graph.acceptance ?? [])
@@ -1012,6 +1351,21 @@ export class DeliveryController {
         generated_at: new Date().toISOString(),
       }, null, 2)}\n`;
       const certificatePath = await this.options.store.writeArtifact(state.run_id, 'completion.json', certificate);
+      await recordDecision(this.options.store, {
+        run_id: state.run_id,
+        phase: 'accept',
+        code: 'acceptance_passed',
+        title: '验收通过，交付完成',
+        detail: '所有强制验收条件均有可追溯证据支持。',
+        outcome: 'pass',
+        data: {
+          snapshot_id: latestSnapshot ?? null,
+          requirements: (state.graph.requirements ?? []).length,
+          acceptance: (state.graph.acceptance ?? []).length,
+          report_path: join(state.repo_root, '.delivery', 'runs', state.run_id, 'reports', 'final.md'),
+          completion_path: certificatePath,
+        },
+      });
       return await this.updateRun(state.run_id, (draft) => {
         for (const requirement of draft.graph.requirements ?? []) {
           requirement.status = 'SATISFIED';
@@ -1022,6 +1376,15 @@ export class DeliveryController {
       });
     }
 
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'accept',
+      code: 'acceptance_blocked',
+      title: '验收证据不可用，运行已阻塞',
+      detail: result.reasons.join('; '),
+      outcome: 'blocked',
+      data: { reasons: result.reasons },
+    });
     return await this.updateRun(state.run_id, (draft) => {
       draft.last_error = `acceptance evidence unavailable: ${result.reasons.join('; ')}`;
       changeRun(draft, 'BLOCKED');
@@ -1030,14 +1393,22 @@ export class DeliveryController {
   }
 
   async pause(runId: string): Promise<RunState> {
-    return await this.updateRun(runId, (draft) => {
+    const state = await this.updateRun(runId, (draft) => {
       draft.pause_requested = true;
       return draft;
     });
+    await recordDecision(this.options.store, {
+      run_id: runId,
+      phase: 'lifecycle',
+      code: 'pause_requested',
+      title: '收到人工暂停请求',
+      outcome: 'info',
+    });
+    return state;
   }
 
   async resume(runId: string): Promise<RunState> {
-    return await this.updateRun(runId, (draft) => {
+    const state = await this.updateRun(runId, (draft) => {
       draft.pause_requested = false;
       if (draft.status === 'PAUSED' || draft.status === 'BLOCKED' || draft.status === 'QUEUED') {
         for (const task of draft.graph.tasks) {
@@ -1051,9 +1422,25 @@ export class DeliveryController {
       }
       return draft;
     });
+    await recordDecision(this.options.store, {
+      run_id: runId,
+      phase: 'lifecycle',
+      code: 'resume_requested',
+      title: '收到人工恢复请求',
+      detail: `运行状态：${state.status}`,
+      outcome: 'info',
+    });
+    return state;
   }
 
   async cancel(runId: string): Promise<RunState> {
+    await recordDecision(this.options.store, {
+      run_id: runId,
+      phase: 'lifecycle',
+      code: 'cancel_requested',
+      title: '收到人工取消请求',
+      outcome: 'info',
+    });
     const state = await this.updateRun(runId, (draft) => {
       changeRun(draft, 'CANCELLED');
       draft.current_task_ids = [];
@@ -1090,6 +1477,15 @@ export class DeliveryController {
           response,
           accepted: false,
         });
+        await recordDecision(this.options.store, {
+          run_id: runId,
+          phase: 'human',
+          code: 'human_decision_rejected',
+          title: `人工验收未通过：${decisionId}`,
+          detail: response,
+          outcome: 'fail',
+          data: { decision_id: decisionId, response },
+        });
         return state;
       }
       const record: EvidenceRecord = {
@@ -1119,6 +1515,15 @@ export class DeliveryController {
         decision_id: decisionId,
         response,
       });
+      await recordDecision(this.options.store, {
+        run_id: runId,
+        phase: 'human',
+        code: 'human_decision_accepted',
+        title: `人工验收通过：${decisionId}`,
+        detail: response,
+        outcome: 'pass',
+        data: { decision_id: decisionId, response },
+      });
       return await this.finishOrContinueAcceptance(state);
     }
 
@@ -1146,6 +1551,15 @@ export class DeliveryController {
       type: 'human_decision',
       decision_id: decisionId,
       response,
+    });
+    await recordDecision(this.options.store, {
+      run_id: runId,
+      phase: 'human',
+      code: 'human_decision_answered',
+      title: `人工决策已记录：${decisionId}`,
+      detail: response,
+      outcome: 'pass',
+      data: { decision_id: decisionId, response },
     });
     return state;
   }
@@ -1178,6 +1592,18 @@ export class DeliveryController {
       type: 'worker_interrupted',
       task_id: taskId,
       summary,
+    });
+    const task = next.graph.tasks.find((candidate) => candidate.id === taskId);
+    const blocked = task?.status === 'BLOCKED';
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'execute',
+      code: blocked ? 'task_blocked' : 'task_retry',
+      title: blocked ? `任务已阻塞：${taskId}` : `任务将重试：${taskId}`,
+      detail: summary,
+      outcome: blocked ? 'blocked' : 'info',
+      task_id: taskId,
+      data: { attempt: task?.attempt ?? null, status: task?.status ?? null },
     });
     return next;
   }
@@ -1245,6 +1671,15 @@ export class DeliveryController {
       type: 'worker_scope_violation',
       task_id: taskId,
       message,
+    });
+    await recordDecision(this.options.store, {
+      run_id: state.run_id,
+      phase: 'execute',
+      code: 'worker_violation',
+      title: `任务被阻塞：${taskId}`,
+      detail: message,
+      outcome: 'blocked',
+      task_id: taskId,
     });
     return next;
   }

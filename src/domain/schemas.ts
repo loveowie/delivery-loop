@@ -135,6 +135,8 @@ export const TaskNodeSchema = z.object({
   dynamic_depth: z.number().int().nonnegative().optional(),
   seed_worktree: z.string().optional(),
   workspace_path: z.string().optional(),
+  changed_files: z.array(z.string()).optional(),
+  last_summary: z.string().optional(),
   failure_context: z.object({ summary: z.string(), evidence: z.unknown().optional(), findings: z.array(z.unknown()).optional() }).optional(),
 });
 

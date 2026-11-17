@@ -5,7 +5,7 @@ description: Run a generic end-to-end software delivery loop from an approved sp
 
 # Deliver Change
 
-Use this Skill only for an explicitly requested end-to-end delivery. For a single small edit, one review, or plan-only work, use the normal Codex workflow instead.
+Use this Skill only for an explicitly requested end-to-end delivery. For a single small edit, one review, or plan-only work, use the normal DSH workflow instead.
 
 ## Intake
 
@@ -35,7 +35,9 @@ Call `delivery_start` with:
 - the prepared specification directory;
 - optional configuration overrides.
 
-Then use `delivery_watch` to wait for meaningful progress. Use `delivery_status` for an on-demand summary. Do not repeatedly poll in a tight loop.
+Then use `delivery_watch` to wait for meaningful progress. Use `delivery_status` for an on-demand summary and `delivery_inspect` for the full task graph, decision timeline, evidence, changed files, and artifacts. Do not repeatedly poll in a tight loop.
+
+The user can follow the same run in the DSH GUI: the Delivery Loop strip under the composer opens a view with progress, every recorded decision, task details, changed-file previews and diffs, artifacts, and the raw event stream.
 
 When the run enters `WAITING_HUMAN`, call `delivery_status`, explain the exact `decision_id`, and use `delivery_respond` after receiving a user answer.
 

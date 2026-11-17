@@ -1,0 +1,7 @@
+- insert:
+    - id: delivery-loop
+      name: 'delivery-loop'
+      config:
+        apiPrefix: /delivery-loop
+        modelInvocableSkill: true
+        systemPrompt: true

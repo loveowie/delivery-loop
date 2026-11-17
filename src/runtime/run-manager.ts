@@ -15,6 +15,7 @@ import type {
 import { createCodeSnapshot } from '../workspace/repository-context.js';
 import { durationExceeded, progressSignature } from './loop-guards.js';
 import { hasActiveWorkerLock } from './worker-lock.js';
+import { recordDecision } from '../controller/decision-journal.js';
 
 export interface DeliveryRunManagerOptions {
   pluginRoot: string;
@@ -112,6 +113,14 @@ export async function drainRepositoryQueue(
         type: 'runtime_launch_error',
         message: error instanceof Error ? error.message : String(error),
       });
+      await recordDecision(store, {
+        run_id: state.run_id,
+        phase: 'lifecycle',
+        code: 'runtime_launch_error',
+        title: '后台 Worker 启动失败，运行已阻塞',
+        detail: error instanceof Error ? error.message : String(error),
+        outcome: 'blocked',
+      });
     }
   }
   if (launchFailed) {
@@ -157,6 +166,14 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
         status: 'BLOCKED',
         last_error: error instanceof Error ? error.message : String(error),
       }));
+      await recordDecision(store, {
+        run_id: state.run_id,
+        phase: 'lifecycle',
+        code: 'runtime_init_failed',
+        title: '运行时初始化失败，运行已阻塞',
+        detail: error instanceof Error ? error.message : String(error),
+        outcome: 'blocked',
+      });
       await this.drain(store);
       throw error;
     }
@@ -314,6 +331,14 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
           status: 'BLOCKED',
           last_error: 'maximum run duration exceeded',
         }));
+        await recordDecision(handle.store, {
+          run_id: state.run_id,
+          phase: 'lifecycle',
+          code: 'duration_exceeded',
+          title: '超过最大运行时长，运行已阻塞',
+          detail: `上限 ${state.config.runtime.max_duration_hours} 小时。`,
+          outcome: 'blocked',
+        });
         return;
       }
       try {
@@ -331,6 +356,14 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
             status: 'BLOCKED',
             last_error: 'no progress detected',
           }));
+          await recordDecision(handle.store, {
+            run_id: next.run_id,
+            phase: 'lifecycle',
+            code: 'no_progress',
+            title: '连续多个调度周期没有进展，运行已阻塞',
+            detail: `${stagnantCycles} 个周期未观察到状态变化。`,
+            outcome: 'blocked',
+          });
           return;
         }
       } catch (error) {
@@ -339,6 +372,14 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
           status: 'BLOCKED',
           last_error: error instanceof Error ? error.message : String(error),
         }));
+        await recordDecision(handle.store, {
+          run_id: state.run_id,
+          phase: 'lifecycle',
+          code: 'runtime_error',
+          title: '调度循环异常，运行已阻塞',
+          detail: error instanceof Error ? error.message : String(error),
+          outcome: 'fail',
+        });
         handle.state = failed;
         return;
       }

@@ -170,7 +170,11 @@ export class StateStore {
     });
   }
 
-  async appendEvent(runId: string, event: Record<string, unknown>): Promise<void> {
+  async appendEvent(
+    runId: string,
+    event: Record<string, unknown>,
+    options: { durable?: boolean } = {},
+  ): Promise<void> {
     const directory = this.getRunDirectory(runId);
     await mkdir(directory, { recursive: true });
     await assertSafePath(join(this.repoRoot, '.delivery'), join(directory, 'events.jsonl'));
@@ -179,7 +183,9 @@ export class StateStore {
       await handle.write(
         `${JSON.stringify({ event_id: randomUUID(), timestamp: new Date().toISOString(), ...event })}\n`,
       );
-      await handle.sync();
+      if (options.durable !== false) {
+        await handle.sync();
+      }
     } finally {
       await handle.close();
     }

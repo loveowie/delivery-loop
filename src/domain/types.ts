@@ -178,6 +178,10 @@ export interface TaskNode {
   dynamic_depth?: number;
   seed_worktree?: string;
   workspace_path?: string;
+  /** Files the worker changed during the latest attempt, relative to the worktree. */
+  changed_files?: string[];
+  /** Latest worker summary, kept for the delivery view and the run report. */
+  last_summary?: string;
   failure_context?: { summary: string; evidence?: EvidenceRecord; findings?: AgentResult['findings'] };
 }
 

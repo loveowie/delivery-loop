@@ -62,4 +62,11 @@ export class RunRegistry {
   async lookup(runId: string): Promise<string | undefined> {
     return (await this.read()).runs[runId]?.repo_root;
   }
+
+  async list(): Promise<Array<{ run_id: string; repo_root: string; registered_at: string }>> {
+    const data = await this.read();
+    return Object.entries(data.runs)
+      .map(([runId, entry]) => ({ run_id: runId, ...entry }))
+      .sort((left, right) => right.registered_at.localeCompare(left.registered_at));
+  }
 }

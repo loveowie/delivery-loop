@@ -99,3 +99,30 @@ Host mode filters environment variables and uses an empty temporary home; it is 
 Initial plans may contain only PENDING/READY tasks with attempt 0 and PENDING requirements. Runtime status, completion claims, worktree paths and failure metadata belong to the controller. `worktree_isolation: false`, `task_review_policy: batch`, `spec.provider: custom`, and ignoring missing required Skills are rejected until implemented.
 
 Worker role profiles and termination grace are now passed to the executor. Run Skill assignments and full content tree hashes are frozen; an old bundle without role assignments requires explicit migration. Final verification includes every mandatory command/test acceptance check and honors its expected exit code. Artifact acceptance without a provider blocks with a missing-evidence diagnostic.
+
+## DSH bundle configuration
+
+The DSH bundle's loader row accepts these fields:
+
+```yaml
+- id: delivery-loop
+  name: 'delivery-loop'
+  config:
+    apiPrefix: /delivery-loop
+    defaultRepoRoot: /optional/fallback/repository
+    modelInvocableSkill: true
+    systemPrompt: true
+    subagentProvider: spawn
+    # subagentMaxDepth: 4
+```
+
+- `apiPrefix`: absolute HTTP prefix for the view API (`runs`, `run`, `file`, `diff`, `action`). Defaults to `/delivery-loop`. The browser half uses the default path; change it only together with `client.js`.
+- `defaultRepoRoot`: used by a tool call that omits `repo_root` when the session has no working directory. Normal calls use the session working directory or the run registry.
+- `modelInvocableSkill`: registers `deliver-change` in the DSH skill catalog. Defaults to `true`.
+- `systemPrompt`: adds a short Delivery Loop section to the system prompt. Defaults to `true`.
+- `subagentProvider`: the `ctx.subagents` provider used for task workers. Defaults to `spawn`, the in-process fresh-child provider. A provider must support `outputSchema`.
+- `subagentMaxDepth`: optional recursion cap passed to the provider. Omit it to leave the cap to the provider/default depth policy.
+
+Task workers are DSH child Agents started with `delivery: 'caller'`, the task worktree as `cwd`, and the engine's `AgentResult` schema as `outputSchema`. The controller runs in the Host process; it remembers the initiating Agent for the run, and uses a coordinator fallback if that Agent is gone after a Host restart. Reviewer and acceptance workers are instructed to stay read-only and are also checked against the candidate snapshot.
+
+These fields configure the DSH Host plugin only; they do not change per-run `DeliveryConfig`, which still comes from `delivery.yaml` and `delivery_start.config_override`.

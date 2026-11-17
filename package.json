@@ -1,15 +1,36 @@
 {
   "name": "delivery-loop",
-  "version": "0.1.0",
-  "description": "Generic end-to-end software delivery orchestration plugin for Codex",
+  "version": "0.2.0",
+  "description": "Native DeepSeek Harness end-to-end delivery orchestration with DSH subagent workers and a delivery view",
   "type": "module",
   "private": false,
+  "main": "dist/dsh/host.js",
+  "exports": {
+    ".": "./dist/dsh/host.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
   "files": [
     ".codex-plugin",
     ".mcp.json",
     "capabilities",
+    "client.js",
+    "cordis.patch.yml",
     "dist",
     "examples",
+    "icon.svg",
+    "locale",
     "schemas",
     "scripts",
     "skills",
@@ -30,6 +51,7 @@
     "test:watch": "tsx --test --watch tests/*.test.ts tests/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "start": "node dist/index.js",
+    "demo:view": "tsx scripts/create-view-demo.ts",
     "test:integration": "tsx --test tests/e2e/*.test.ts tests/workspace/*real-git.test.ts tests/workers/*process*.test.ts",
     "verify:release": "tsx scripts/verify-release.ts"
   },

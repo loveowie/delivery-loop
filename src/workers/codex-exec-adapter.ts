@@ -26,7 +26,7 @@ export function buildWorkerPrompt(request: AgentRequest): string {
 
   return [
     '# Delivery Worker Contract',
-    '你是由 deliveryd 启动的单一任务 Worker。',
+    '你是由 Delivery Loop 启动的单一任务 Worker。',
     '只完成当前任务；完成当前任务后停止，不得继续调度其他任务。',
     '不得递归创建交付运行或交付Worker，不得等待用户直接输入；需要人工决策时返回 blockers。',
     '不得执行 git commit、git push、git merge 或部署。',
