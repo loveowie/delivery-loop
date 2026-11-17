@@ -65,11 +65,6 @@ test('run manager completes a scripted-worker delivery loop against real Git', a
       preparedRunFactory: new PreparedRunFactory(new NodeRepositoryInspector()),
       runtimeFactory: new RuntimeFactory({
         pluginRoot: process.cwd(),
-        probe: {
-          async version(command) {
-            return command === 'codex' ? 'codex-cli 0.164.0' : undefined;
-          },
-        },
         workerAdapter: {
           async run(request: { task_id: string }) {
             return {

@@ -3,18 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DeliveryToolService } from '../../src/mcp/tools.js';
+import { DeliveryService } from '../../src/service/delivery-service.js';
 import { StateStore } from '../../src/state/state-store.js';
 import { DEFAULT_CONFIG } from '../../src/config/config.js';
 import type { RunState } from '../../src/domain/types.js';
 import { EvidenceLedger } from '../../src/state/evidence-ledger.js';
 
 async function managedRun(): Promise<{
-  service: DeliveryToolService;
+  service: DeliveryService;
   store: StateStore;
   state: RunState;
 }> {
-  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-mcp-'));
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-service-'));
   const store = await StateStore.open(repo);
   const state: RunState = {
     state_schema_version: 1,
@@ -49,7 +49,7 @@ async function managedRun(): Promise<{
     },
     async start() { return this.get(); },
   };
-  const service = new DeliveryToolService(manager as never, async () => {});
+  const service = new DeliveryService(manager as never, async () => {});
   return { service, store, state };
 }
 
@@ -72,7 +72,7 @@ test('status returns a bounded summary rather than full logs', async () => {
 });
 
 test('status uses the read-only manager path when available', async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-mcp-read-'));
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-service-read-'));
   const store = await StateStore.open(repo);
   const state: RunState = {
     state_schema_version: 1,
@@ -90,7 +90,7 @@ test('status uses the read-only manager path when available', async () => {
   };
   await store.createRun(state);
   let reads = 0;
-  const service = new DeliveryToolService(
+  const service = new DeliveryService(
     {
       async read() {
         reads += 1;
@@ -114,8 +114,8 @@ test('status uses the read-only manager path when available', async () => {
 });
 
 test('export report uses the resolved repository and includes persisted evidence', async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-mcp-report-'));
-  const unrelated = await mkdtemp(join(tmpdir(), 'delivery-loop-mcp-unrelated-'));
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-service-report-'));
+  const unrelated = await mkdtemp(join(tmpdir(), 'delivery-loop-service-unrelated-'));
   const store = await StateStore.open(repo);
   const state: RunState = {
     state_schema_version: 1,
@@ -146,7 +146,7 @@ test('export report uses the resolved repository and includes persisted evidence
     stderr_path: '',
     result: 'passed',
   });
-  const service = new DeliveryToolService(
+  const service = new DeliveryService(
     {
       async read() { return { state, store, repoRoot: repo }; },
       async get() { throw new Error('report export must use the read path'); },
@@ -176,7 +176,7 @@ test('finalize requires exact run id confirmation', async () => {
 test('prepare-only finalize succeeds without executing commit', async () => {
   const { service, state } = await managedRun();
   const calls: string[] = [];
-  const serviceWithSpy = new DeliveryToolService(
+  const serviceWithSpy = new DeliveryService(
     {
       async get() {
         return { state, store: await StateStore.open(state.repo_root), repoRoot: state.repo_root, controller: {} as never };

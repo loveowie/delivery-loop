@@ -1,41 +1,51 @@
-# 最终验收报告 — 2026年11月3日
+# Verification report
 
-在 macOS、Node.js v24.14.0 环境下，最终执行 `npm run verify:release` 成功完成：
+Date: 2026-11-17 (Asia/Shanghai)
+Environment: macOS, DeepSeek Harness Desktop 0.2.2-rc.3, Node 24.
 
-- **197 个测试通过，0 个失败**
-- Schema 生成一致性检查通过
-- TypeScript 类型检查通过
-- 项目构建通过
-- 10 个 vendored Skill 校验通过
-- 临时 npm 包结构与入口语法检查通过
-- 独立生产依赖安装通过
-- MCP stdio 启动握手通过，共发现 **9 个工具**
+## Automated checks
 
-完整命令输出保存在 [最终验收日志](reviews/2026-11-03-release-verification.log)。本次未执行 Linux、Windows 或远程 CI 验证。最终源码摘要和变更清单保存在 [实现结果清单](reviews/2026-11-03-implementation-results.json)。
+| Check | Result |
+| --- | --- |
+| `npm test` | 174/174 passed (final count is rechecked by `npm run verify:release`) |
+| `npm run typecheck` | passed |
+| `npm run build` | passed |
+| `npm run verify:skills` | 10 vendored Skills verified |
+| DSH bundle activation | `include:delivery-loop` active |
+| Native tools | all 10 `delivery_*` tools visible |
+| Skill catalog | `deliver-change` listed |
+| Client slots | dock, overlay, settings section and all 10 tool-view keys active |
+| View API | health/runs/run/file/diff verified; unauthenticated requests return 401 |
+| Package layout | Host/Client halves, locale, icon, schemas and patch present; legacy paths absent |
 
-基于官方 npm registry 的生产依赖审计结果为 **0 个已报告漏洞**。该结果仅表示当前审计数据库未报告漏洞，不能替代完整安全审查。
+## Live native delivery run
 
-原始的 94 项测试报告保存在 [历史验收报告](reviews/2026-10-28-verification-report-historical.md)。现有的 `release/delivery-loop-0.1.0.tgz` 早于本轮修复，未被替换或发布。
+A real DSH-hosted run was executed in a temporary Git repository:
 
-## 本次验收确认的能力
+| Field | Value |
+| --- | --- |
+| Run id | `R-DSH-NATIVE-2` |
+| Status | `COMPLETED` |
+| Progress | 1/1 |
+| Worker | fresh DSH subagent via `ctx.subagents` (`spawn`) |
+| Task | create `src/hello2.ts` with a `hello2` function |
+| Verification | `test -f src/hello2.ts` passed |
+| Integration | `SNAP-aff48c438694` |
+| Token usage | 146,848 |
+| `usage_incomplete` | false |
+| Decisions | 8: run_started, task_started, worker_completed, verification_passed, integration_passed, task_done, final_verification_passed, acceptance_passed |
+| Errors / pending decisions | none |
 
-- 真实 Git 内容身份能够处理文件模式、符号链接、删除、二进制文件、未跟踪文件和冻结 seed delta；补丁应用与候选结果重放均有回归覆盖。
-- 脚本化 Worker 能完成“实现失败 → 修复 → 评审 → 最终验收 → 证书和交付产物应用”的闭环。
-- 多个依赖任务集成后，会在最新快照上重新执行前序验收条件，确保合并内容没有使用过期证据。
-- 本地真实子进程的取消、超时、正常退出、残留后代清理、日志 flush、已测量／未知用量和 detached IPC ready 握手均有验证。
-- 仓库 FIFO 准入、运行所有权释放、只读状态查询、最终化重试恢复，以及本地临时 Git 和 bare remote fixture 均有覆盖。
-- Skill 安装目录被删除后，冻结能力包仍可恢复；冻结 Skill 内容被篡改时会拒绝恢复。
-- 发布包可以在不依赖开发依赖的情况下安装，并从隔离工作目录和 HOME 启动 MCP。
+The worker used the DSH file/shell tools, followed the task contract, produced `src/hello2.ts` and a test, and returned a validated `AgentResult` through `structured_output`.
 
-## 本次尚未建立的保证
+## View verification
 
-以下项目仍然不能视为已完成：
+The run is visible in **Settings → 交付循环** with its title, status, progress, token usage, task, decisions, changed files, artifacts and completion reference. HTTP responses for the same run were checked directly. The browser page's rendered layout, light/dark appearance, focus behavior and narrow-width layout were not visually verified because no browser control was available; refresh the page after installing or upgrading the client.
 
-- 真实付费 Codex 或模型输出协议兼容性，以及真实 Provider 用量保证。
-- 实际容器隔离边界，包括宿主哨兵文件保护、网络隔离、凭据隔离和真实工具链兼容性。
-- 多进程崩溃一致性、旧 epoch fencing、跨 worktree 仓库所有权、exactly-once 用量结算和硬性 token 预留。
-- 从独立安装包执行 prepared delivery 以及重启恢复。
-- Linux CI、Windows 支持和生产级可靠性发布。
+## Not verified
 
-剩余执行契约和完整判断见 [全局实施评估](reviews/2026-11-03-global-implementation.md) 与 [实施进度台账](implementation/2026-11-03-progress.md)。
-
+- real container isolation (no container runtime on this host);
+- provider quota/paid protocol failures;
+- a real Host restart with the coordinator fallback;
+- a reviewer/acceptance task that attempts a write (the snapshot check is covered by controller tests, not OS isolation);
+- Windows.

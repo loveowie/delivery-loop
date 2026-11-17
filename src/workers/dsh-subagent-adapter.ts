@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { AgentResultSchema } from '../domain/schemas.js';
 import type { AgentRequest, AgentResult } from '../domain/types.js';
-import { buildWorkerPrompt } from './codex-exec-adapter.js';
+import { buildWorkerPrompt } from './worker-prompt.js';
 import type { WorkerAdapter, WorkerRunOptions } from './worker-adapter.js';
 
 /** Minimal DSH services used by the native worker adapter. */

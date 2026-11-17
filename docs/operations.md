@@ -1,60 +1,65 @@
 # Operations
 
-## Status model
+Delivery Loop runs inside the DSH Host process. This page covers starting, observing, controlling, and recovering a run.
 
-The controller persists `DRAFT`, `SPEC_READY`, `QUEUED`, `PLANNING`, `RUNNING`, `VERIFYING`, `WAITING_HUMAN`, `BLOCKED`, `PAUSED`, `COMPLETED` and `CANCELLED`.
+## Start
 
-Tasks pass through `PENDING`, `READY`, `RUNNING`, `VERIFYING`, optional `REVIEWING`, `INTEGRATING`, `DONE`, and the corresponding interruption, repair or cancellation states.
+Prepare `.delivery/prepared/<draft-id>/` with `spec.md` and `task-graph.json` (and optionally `delivery.yaml`), then call `delivery_start` with the repository root and prepared directory. The tool returns a run id and initial status.
 
-## MCP tools
+The controller starts immediately in the Host process. A run occupies one repository write slot; additional runs in the same repository are queued until the active run stops or completes.
 
-- `delivery_start`: create and start an approved run.
-- `delivery_status`: return a bounded summary and latest events.
-- `delivery_watch`: wait for progress within the supplied timeout.
-- `delivery_respond`: answer a pending human decision.
-- `delivery_pause`, `delivery_resume`, `delivery_cancel`: control a run.
-- `delivery_export_report`: write `reports/final.md`.
-- `delivery_finalize`: execute an explicitly confirmed finalization mode.
+## Observe
+
+- `delivery_status` returns progress, current tasks, pending decisions, recent decisions and the last error.
+- `delivery_inspect` returns the full task graph, requirements, acceptance, decision timeline, evidence index, changed files and artifacts.
+- `delivery_watch` waits for progress or a terminal state; use it instead of polling in a tight loop.
+- The DSH view shows the same data: the composer strip, the full overlay, and **Settings → 交付循环**.
+
+Terminal and waiting states are `COMPLETED`, `CANCELLED`, `BLOCKED`, `PAUSED` and `WAITING_HUMAN`.
+
+## Human decisions
+
+A blocked worker or a manual acceptance condition produces a pending decision. Read the exact decision id and options from `delivery_status`, then call `delivery_respond`. A response wakes the controller and resumes affected tasks.
+
+## Control
+
+- `delivery_pause` stops scheduling after the current step.
+- `delivery_resume` resumes a paused, queued or blocked run.
+- `delivery_cancel` aborts running workers and marks unfinished tasks `CANCELLED`; it cannot be undone.
+- `delivery_export_report` writes `reports/final.md` into the run directory.
+- `delivery_finalize` applies only the explicitly confirmed Git mode; the default is `prepare-only`.
 
 ## State layout
 
 ```text
-.delivery/runs/<run-id>/
-├── run.json
-├── resolved-config.yaml
-├── spec.md
-├── requirements.json
-├── task-graph.json
-├── events.jsonl
-├── evidence/
-├── snapshots/
-├── worker-results/
-├── reports/
-├── runtime-skills/
-├── worktrees/
-└── delivery.patch
+<repo>/.delivery/
+├── prepared/<draft-id>/          # input prepared by the skill
+└── runs/<run-id>/
+    ├── run.json                  # authoritative run state
+    ├── events.jsonl              # lifecycle and decision events
+    ├── spec.md
+    ├── task-graph.json
+    ├── resolved-config.yaml
+    ├── evidence/index.json + logs
+    ├── worktrees/                # isolated task and candidate checkouts
+    ├── reports/final.md
+    └── completion.json
 ```
 
-The plugin excludes `.delivery/` from Git snapshots and generated patches. It does not modify `.gitignore` automatically.
+`~/.delivery-loop/runs.json` maps run ids to repositories so a restarted Host can resolve a run.
+
+## Workers
+
+Each task worker is a fresh DSH child Agent. The initiating Agent is remembered as the run's parent; if it is gone (for example after a Host restart), the adapter falls back to a live Agent or a coordinator Agent. Workers are caller-delivered, so their results do not appear as settlement messages in the user's conversation.
 
 ## Recovery
 
-The MCP gateway starts a detached controller process for each active run. The registry normally records the run-to-repository mapping automatically, so `delivery_status` can reload it after the gateway restarts. `repo_root` is available as an override. `delivery_resume` starts the controller again for a paused or blocked run.
+A restarted Host can reload a run from `run.json`, recreate the runtime and continue from `QUEUED`/`RUNNING`/`BLOCKED` as appropriate. Paused runs remain paused. A missing managed worktree or frozen seed index is rejected rather than silently recreated.
 
-Interrupted tasks return to `READY` unless unresolved human decisions still block them. Existing managed worktrees are reused after validation; original failure context and repair seeds are retained. A missing frozen seed index is rejected. Status/report can read stored diagnostics even when Codex or installed Skill configuration is unavailable.
+## Troubleshooting
 
-## Security boundaries
-
-- Workers are launched with the current Codex authentication and `workspace-write` sandbox.
-- Secrets are never intentionally persisted; command logs redact common token and password forms.
-- Worker prompts prohibit recursive Delivery Loop execution; this is a protocol constraint, not a complete operating-system capability boundary.
-- Git mutations other than approved worktree operations require an explicit completion confirmation.
-- The MCP server communicates over stdio and does not open a public network port.
-
-## Reliability boundary
-
-See [the implementation assessment](reviews/2026-11-03-global-implementation.md) for current guarantees and incomplete contracts. State files use durable atomic replacement and revisions; events, evidence, usage and Git side effects are not one transaction. Repository admission has no lease epoch fencing and no cross-worktree common-directory coordination. Unknown usage is visible but does not yet impose a hard stop.
-
-Verification defaults to container execution and does not fall back to the host. Trusted-host execution must be explicitly selected. Container execution is not validated on this development host. A missing runtime, pinned image, or failed launch blocks execution; fix the environment before resuming. Container exit codes 125–127 are classified as execution errors. Baseline ordinary test failures remain recorded diagnostics and do not automatically quarantine pre-existing failures.
-
-Finalization writes `finalization/journal.json`; reports display the recorded action/status/result. A repeated identical completed request does not execute Git again, while an interrupted intent reconciles observable refs. This is not an atomic transaction with local Git or the remote.
+- **`DSH subagent provider "spawn" is not registered`**: the composition lacks `@deepseek-ai/dsh-subagent-spawn-in-process` or configured another provider name. Register the provider or set `subagentProvider`.
+- **Workers can read but not write**: the child inherits the initiating session's sandbox and approval policy. Run the delivery from a session with workspace write permission.
+- **Verification blocks with a container error**: the default backend is fail-closed. Install a digest-pinned image or explicitly set `verification.execution.backend: trusted-host` for a trusted project.
+- **`usage_incomplete: true`**: no assistant-message usage event was observed for a worker. The run remains usable; token budget enforcement is conservative when usage is unknown.
+- **View shows 401**: refresh the DSH page so it receives the current per-process view token.

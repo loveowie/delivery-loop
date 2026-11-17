@@ -177,6 +177,15 @@
           "workspace_path": {
             "type": "string"
           },
+          "changed_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_summary": {
+            "type": "string"
+          },
           "failure_context": {
             "type": "object",
             "properties": {

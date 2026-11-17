@@ -69,13 +69,6 @@
     "runtime": {
       "type": "object",
       "properties": {
-        "daemon_mode": {
-          "type": "string",
-          "enum": [
-            "detached",
-            "foreground"
-          ]
-        },
         "max_parallel_workers": {
           "type": "integer",
           "minimum": 1,
@@ -136,7 +129,6 @@
         }
       },
       "required": [
-        "daemon_mode",
         "max_parallel_workers",
         "default_worker_timeout_seconds",
         "worker_termination_grace_seconds",

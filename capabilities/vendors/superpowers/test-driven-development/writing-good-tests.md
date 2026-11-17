@@ -108,7 +108,7 @@ vi.mock('ToolCatalog', () => ({
 }));
 
 // ✅ Mock only the slow server startup; the config write stays real
-vi.mock('MCPServerManager');
+vi.mock('ExternalServiceManager');
 ```
 
 **Make doubles specific.** When arguments, call counts, or ordering are

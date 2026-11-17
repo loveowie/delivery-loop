@@ -1,6 +1,5 @@
 export type ProfileName = 'portable' | 'openspec';
 export type SpecProviderName = 'native' | 'openspec' | 'custom';
-export type RuntimeMode = 'detached' | 'foreground';
 export type GitMode = 'prepare-only' | 'commit' | 'branch' | 'push' | 'merge';
 
 export interface SpecConfig {
@@ -17,7 +16,6 @@ export interface CapabilityConfig {
 }
 
 export interface RuntimeConfig {
-  daemon_mode: RuntimeMode;
   max_parallel_workers: number;
   default_worker_timeout_seconds: number;
   worker_termination_grace_seconds: number;

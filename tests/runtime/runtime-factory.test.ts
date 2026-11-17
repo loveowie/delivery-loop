@@ -28,11 +28,6 @@ test('runtime factory preflights skills and constructs a delivery controller', a
   await store.createRun(state);
   const factory = new RuntimeFactory({
     pluginRoot: process.cwd(),
-    probe: {
-      async version(command) {
-        return command === 'codex' ? 'codex-cli 0.164.0' : undefined;
-      },
-    },
     gitExecutor: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     workerAdapter: {
       async run() {
@@ -53,7 +48,7 @@ test('reopened runtime uses frozen role assignments after installed profile chan
   const repo=await mkdtemp(join(tmpdir(),'delivery-runtime-frozen-'));const plugin=await mkdtemp(join(tmpdir(),'delivery-plugin-frozen-'));
   await cp(join(process.cwd(),'capabilities'),join(plugin,'capabilities'),{recursive:true});
   const store=await StateStore.open(repo);await store.createRun({state_schema_version:1,run_id:'run',status:'PLANNING',repo_root:repo,created_at:'now',updated_at:'now',config:structuredClone(DEFAULT_CONFIG),graph:{run_id:'run',tasks:[]},current_task_ids:[],pause_requested:false,pending_decision_ids:[]});
-  const factory=new RuntimeFactory({pluginRoot:plugin,probe:{async version(){return 'codex-cli 0.164.0';}},gitExecutor:async()=>({stdout:'',stderr:'',exitCode:0}),workerAdapter:{async run(){throw Error('unused');}}});
+  const factory=new RuntimeFactory({pluginRoot:plugin,gitExecutor:async()=>({stdout:'',stderr:'',exitCode:0}),workerAdapter:{async run(){throw Error('unused');}}});
   const first=await factory.create(repo,'run');const before=await first.skillResolver.resolve('portable','implementer',[]);
   assert.ok(before.length>0);
   const rolesPath=join(plugin,'capabilities','role-skills.yaml');await writeFile(rolesPath,'roles:\n  implementer:\n    skills: []\n');
@@ -82,7 +77,6 @@ test('reopened runtime uses only the frozen skill tree when installed capabiliti
   });
   const options = {
     pluginRoot: plugin,
-    probe: { async version() { return 'codex-cli 0.164.0'; } },
     gitExecutor: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     workerAdapter: { async run() { throw Error('unused'); } },
   };
@@ -116,7 +110,6 @@ test('reopened runtime rejects a tampered frozen skill tree', async () => {
   });
   const options = {
     pluginRoot: plugin,
-    probe: { async version() { return 'codex-cli 0.164.0'; } },
     gitExecutor: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     workerAdapter: { async run() { throw Error('unused'); } },
   };

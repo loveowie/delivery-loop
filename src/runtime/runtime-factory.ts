@@ -7,7 +7,6 @@ import { DeliveryController } from '../controller/delivery-controller.js';
 import type { SkillProvider } from '../controller/delivery-controller.js';
 import { EvidenceLedger } from '../state/evidence-ledger.js';
 import { StateStore } from '../state/state-store.js';
-import { CodexExecAdapter } from '../workers/codex-exec-adapter.js';
 import type { WorkerAdapter } from '../workers/worker-adapter.js';
 import { CommandRunner } from '../verification/command-runner.js';
 import { GuardedGitAdapter, createNodeGitExecutor } from '../workspace/git-adapter.js';
@@ -24,11 +23,8 @@ export interface RuntimeFactoryOptions {
   pluginRoot: string;
   probe?: CommandProbe;
   gitExecutor?: (args: string[], cwd?: string, options?: GitExecutionOptions) => Promise<GitCommandResult>;
-  workerAdapter?: WorkerAdapter;
-  /** Codex executable or wrapper used by the default worker adapter. */
-  codexCommand?: string;
-  /** Fail instead of falling back to the Codex adapter when no workerAdapter is supplied. */
-  requireWorkerAdapter?: boolean;
+  /** DSH-native worker backend; required for every run. */
+  workerAdapter: WorkerAdapter;
 }
 
 export interface DeliveryRuntime {
@@ -48,9 +44,6 @@ export class RuntimeFactory {
   }
 
   async create(repoRoot: string, runId: string): Promise<DeliveryRuntime> {
-    if (this.options.requireWorkerAdapter === true && this.options.workerAdapter === undefined) {
-      throw new Error('DSH subagent services are unavailable; the native delivery worker adapter is not configured');
-    }
     const store = await StateStore.open(repoRoot);
     const state = await store.readRun(runId);
     if (state === undefined) {
@@ -107,7 +100,6 @@ export class RuntimeFactory {
       this.options.probe ?? new NodeCommandProbe(),
       runtimeSkillProvider,
       state.repo_root,
-      this.options.workerAdapter === undefined,
     );
 
     const git = new GuardedGitAdapter(
@@ -144,14 +136,7 @@ export class RuntimeFactory {
       snapshots,
       runDirectory,
     });
-    const workerAdapter =
-      this.options.workerAdapter ??
-      new CodexExecAdapter({
-        schemaPath: join(this.options.pluginRoot, 'schemas', 'agent-result.schema.json'),
-        ...(this.options.codexCommand === undefined ? {} : { command: this.options.codexCommand }),
-        terminationGraceMs: state.config.runtime.worker_termination_grace_seconds * 1000,
-        diagnosticDirectory: join(runDirectory, 'worker-diagnostics'),
-      });
+    const workerAdapter = this.options.workerAdapter;
 
     const controller = new DeliveryController({
       repoRoot,

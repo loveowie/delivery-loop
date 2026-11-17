@@ -76,7 +76,7 @@ function stateStatus(state: RunState) {
   };
 }
 
-export class DeliveryToolService {
+export class DeliveryService {
   private readonly manager: DeliveryRunManagerPort;
   private readonly finalizeExecutor: FinalizeExecutor;
   private readonly sleep: (milliseconds: number) => Promise<void>;

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { DeliveryRunManager } from '../runtime/run-manager.js';
 import { RuntimeFactory } from '../runtime/runtime-factory.js';
-import { DeliveryToolService } from '../mcp/tools.js';
+import { DeliveryService } from '../service/delivery-service.js';
 import { RunRegistry } from '../runtime/run-registry.js';
 import { DshSubagentWorkerAdapter } from '../workers/dsh-subagent-adapter.js';
 import type { DshAgent } from '../workers/dsh-subagent-adapter.js';
@@ -19,7 +19,7 @@ const MAX_BODY_BYTES = 1_000_000;
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'BLOCKED', 'PAUSED', 'WAITING_HUMAN']);
 
 /** Services this plugin requires; optional services are reached through `ctx.get`. */
-export const inject = ['tools'];
+export const inject = ['tools', 'agents', 'subagents'];
 
 interface DeliveryLoopConfig {
   defaultRepoRoot?: string;
@@ -76,19 +76,6 @@ function normalizeConfig(raw: unknown): DeliveryLoopConfig {
 function newRunId(): string {
   const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
   return `R-${timestamp}-${randomUUID().slice(0, 8)}`;
-}
-
-function foregroundOverride(raw: unknown): Record<string, unknown> {
-  const source = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
-    : {};
-  const runtime = source.runtime !== null && typeof source.runtime === 'object' && !Array.isArray(source.runtime)
-    ? source.runtime as Record<string, unknown>
-    : {};
-  return {
-    ...source,
-    runtime: { ...runtime, daemon_mode: 'foreground' },
-  };
 }
 
 function paramToJson(spec: ParamSpec): Record<string, unknown> {
@@ -270,7 +257,7 @@ function registerSystemPrompt(ctx: any): void {
 function registerWebApi(ctx: any, options: {
   config: DeliveryLoopConfig;
   view: DeliveryViewService;
-  service: DeliveryToolService;
+  service: DeliveryService;
   token: string;
 }): void {
   const webServer = ctx.get?.('webServer');
@@ -458,19 +445,18 @@ export function apply(ctx: any, rawConfig: unknown): void {
     })
     : undefined;
   if (workerAdapter === undefined) {
-    console.warn('[delivery-loop] DSH agents/subagents services are unavailable; native workers are disabled.');
+    throw new Error('Delivery Loop requires the DSH `agents` and `subagents` services');
   }
 
   const manager = new DeliveryRunManager({
     pluginRoot: PLUGIN_ROOT,
     runtimeFactory: new RuntimeFactory({
       pluginRoot: PLUGIN_ROOT,
-      ...(workerAdapter === undefined ? {} : { workerAdapter }),
-      requireWorkerAdapter: true,
+      workerAdapter,
     }),
     registry,
   });
-  const service = new DeliveryToolService(
+  const service = new DeliveryService(
     manager,
     async (action, handle, context) => await manager.executeFinalize(action, handle, context),
   );
@@ -508,7 +494,9 @@ export function apply(ctx: any, rawConfig: unknown): void {
           repo_root: repoRoot,
           prepared_directory: String(args.prepared_directory),
           run_id: runId,
-          config_override: foregroundOverride(args.config_override) as never,
+          ...(args.config_override !== null && typeof args.config_override === 'object'
+            ? { config_override: args.config_override as never }
+            : {}),
         };
         const handle = await manager.start(input);
         return toolSummary(await view.getStatus(handle.state.run_id, handle.repoRoot));

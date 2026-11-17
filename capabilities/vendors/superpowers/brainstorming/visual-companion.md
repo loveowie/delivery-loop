@@ -67,13 +67,6 @@ scripts/start-server.sh --project-dir /path/to/project --open
 
 On Windows, the script auto-detects and switches to foreground mode (which blocks the tool call). Use `run_in_background: true` on the Bash tool call so the server survives across conversation turns, then read `$STATE_DIR/server-info` on the next turn to get the URL and port.
 
-**Codex:**
-```bash
-# Codex reaps background processes. The script auto-detects CODEX_CI and
-# switches to foreground mode. Run it normally — no extra flags needed.
-scripts/start-server.sh --project-dir /path/to/project --open
-```
-
 **Gemini CLI:**
 ```bash
 # Use --foreground and set is_background: true on your shell tool call

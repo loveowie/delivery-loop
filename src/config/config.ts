@@ -18,7 +18,6 @@ export const DEFAULT_CONFIG: DeliveryConfig = {
     project_skills: [],
   },
   runtime: {
-    daemon_mode: 'detached',
     max_parallel_workers: 2,
     default_worker_timeout_seconds: 1800,
     worker_termination_grace_seconds: 30,

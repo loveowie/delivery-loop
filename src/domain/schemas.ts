@@ -18,7 +18,6 @@ const DeliveryConfigSchemaInternal = z.object({
     project_skills: z.array(z.string()),
   }),
   runtime: z.object({
-    daemon_mode: z.enum(['detached', 'foreground']),
     max_parallel_workers: z.number().int().min(1),
     default_worker_timeout_seconds: z.number().int().positive(),
     worker_termination_grace_seconds: z.number().int().nonnegative(),

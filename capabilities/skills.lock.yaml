@@ -3,7 +3,7 @@ skills:
   brainstorming:
     path: capabilities/vendors/superpowers/brainstorming
     entry: SKILL.md
-    sha256: 74edf03ea6d24ef53db48677b93558d14a979bdf052ca3f57ecdca0c66791608
+    sha256: 83dbed41917c93293a0be46e02a80bba20e4e803b26845e5078f3f0361b47b89
     resources:
       - visual-companion.md
       - spec-document-reviewer-prompt.md
@@ -41,7 +41,7 @@ skills:
   executing-plans:
     path: capabilities/vendors/superpowers/executing-plans
     entry: SKILL.md
-    sha256: c4c3d8b628c51114cd165fb8246fe02744cd8be180032328391252e653028d9b
+    sha256: 6619dba85b74cdcdcbf95a9f6bd2ef11d61b6bdc8a27d6a00ea9604ff37b21d6
     resources: []
   openspec-explore:
     path: capabilities/vendors/openspec/explore

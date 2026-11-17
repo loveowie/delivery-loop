@@ -13,7 +13,7 @@ test('portable config defaults to native provider and no external project skills
   assert.equal(config.profile, 'portable');
   assert.equal(config.spec.provider, 'native');
   assert.deepEqual(config.capabilities.project_skills, []);
-  assert.equal(config.runtime.daemon_mode, 'detached');
+  assert.equal(config.runtime.max_parallel_workers, 2);
   assert.equal(config.git.mode, 'prepare-only');
 });
 

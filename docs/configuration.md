@@ -1,6 +1,6 @@
 # Configuration
 
-Repository configuration lives in `delivery.yaml`. CLI or MCP start options override it for one run. The merged configuration is frozen into `.delivery/runs/<run-id>/resolved-config.yaml`.
+Repository configuration lives in `delivery.yaml`. The merged configuration is frozen into `.delivery/runs/<run-id>/resolved-config.yaml` when a run starts. Start overrides supplied to `delivery_start` apply only to that run.
 
 ## Minimal portable configuration
 
@@ -35,6 +35,8 @@ git:
   worktree_isolation: true
 ```
 
+`runtime.daemon_mode` no longer exists: the DSH plugin always runs the controller in the Host process and workers as native subagents.
+
 ## Optional OpenSpec provider
 
 ```yaml
@@ -44,7 +46,7 @@ spec:
   minimum_cli_version: "1.7.0"
 ```
 
-Select this only when the target project uses OpenSpec and the CLI is installed. Copying the OpenSpec Skill does not install the CLI. The current implementation checks CLI availability and overlays OpenSpec Skills; task execution remains in the internal DAG. It does not implement a separate OpenSpec lifecycle adapter.
+Select this only when the target project uses OpenSpec and the CLI is installed. Copying the OpenSpec Skill does not install the CLI. Task execution remains in the internal DAG; this is a spec-discovery provider, not an external agent runtime.
 
 ## Project Skills
 
@@ -94,15 +96,11 @@ verification:
     backend: trusted-host
 ```
 
-Host mode filters environment variables and uses an empty temporary home; it is **not** OS isolation. Container execution has not been validated on this development host because a container runtime is unavailable. Missing runtime/image causes error evidence and blocks the run; it never falls back to host execution.
-
-Initial plans may contain only PENDING/READY tasks with attempt 0 and PENDING requirements. Runtime status, completion claims, worktree paths and failure metadata belong to the controller. `worktree_isolation: false`, `task_review_policy: batch`, `spec.provider: custom`, and ignoring missing required Skills are rejected until implemented.
-
-Worker role profiles and termination grace are now passed to the executor. Run Skill assignments and full content tree hashes are frozen; an old bundle without role assignments requires explicit migration. Final verification includes every mandatory command/test acceptance check and honors its expected exit code. Artifact acceptance without a provider blocks with a missing-evidence diagnostic.
+Host mode filters environment variables and uses an empty temporary home; it is **not** OS isolation. Missing runtime/image causes error evidence and blocks the run; it never falls back to host execution.
 
 ## DSH bundle configuration
 
-The DSH bundle's loader row accepts these fields:
+The bundle's loader row accepts:
 
 ```yaml
 - id: delivery-loop
@@ -122,7 +120,5 @@ The DSH bundle's loader row accepts these fields:
 - `systemPrompt`: adds a short Delivery Loop section to the system prompt. Defaults to `true`.
 - `subagentProvider`: the `ctx.subagents` provider used for task workers. Defaults to `spawn`, the in-process fresh-child provider. A provider must support `outputSchema`.
 - `subagentMaxDepth`: optional recursion cap passed to the provider. Omit it to leave the cap to the provider/default depth policy.
-
-Task workers are DSH child Agents started with `delivery: 'caller'`, the task worktree as `cwd`, and the engine's `AgentResult` schema as `outputSchema`. The controller runs in the Host process; it remembers the initiating Agent for the run, and uses a coordinator fallback if that Agent is gone after a Host restart. Reviewer and acceptance workers are instructed to stay read-only and are also checked against the candidate snapshot.
 
 These fields configure the DSH Host plugin only; they do not change per-run `DeliveryConfig`, which still comes from `delivery.yaml` and `delivery_start.config_override`.

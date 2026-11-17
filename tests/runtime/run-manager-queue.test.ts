@@ -82,7 +82,6 @@ test('read loads persisted state without constructing or launching a runtime', a
   await store.createRun(runState(repo, 'run-1', 'BLOCKED', '2026-11-03T00:00:00Z'));
   await registry.register('run-1', repo);
   let runtimeCreates = 0;
-  let launches = 0;
   const manager = new DeliveryRunManager({
     pluginRoot: process.cwd(),
     registry,
@@ -92,9 +91,6 @@ test('read loads persisted state without constructing or launching a runtime', a
         throw new Error('runtime construction must not happen during read');
       },
     } as never,
-    workerLauncher: async () => {
-      launches += 1;
-    },
   });
 
   const result = await manager.read('run-1');
@@ -102,7 +98,6 @@ test('read loads persisted state without constructing or launching a runtime', a
   assert.equal(result.state.status, 'BLOCKED');
   assert.equal(result.repoRoot, repo);
   assert.equal(runtimeCreates, 0);
-  assert.equal(launches, 0);
 });
 
 test('foreground completion automatically starts the next queued run', async () => {

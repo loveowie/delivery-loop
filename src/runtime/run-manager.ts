@@ -23,7 +23,6 @@ export interface DeliveryRunManagerOptions {
   preparedRunFactory?: PreparedRunFactory;
   registry?: RunRegistry;
   sleep?: (milliseconds: number) => Promise<void>;
-  workerLauncher?: (repoRoot: string, runId: string, pluginRoot: string) => Promise<void>;
 }
 
 function ownsRepositoryWriteSlot(status: string): boolean {
@@ -244,13 +243,6 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     let handle = this.handles.get(state.run_id);
     if (handle !== undefined) {
       handle.state = state;
-    }
-    if (
-      this.options.workerLauncher !== undefined &&
-      state.config.runtime.daemon_mode === 'detached'
-    ) {
-      await this.options.workerLauncher(store.repoRoot, state.run_id, this.options.pluginRoot);
-      return;
     }
     if (handle === undefined) {
       const runtime = await this.options.runtimeFactory.create(store.repoRoot, state.run_id);
