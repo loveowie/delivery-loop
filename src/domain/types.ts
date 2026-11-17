@@ -233,6 +233,8 @@ export interface RunState {
   integration_worktree?: string;
   final_verification_snapshot_id?: string;
   baseline_verification_id?: string;
+  /** Configured verification commands that already failed at the baseline. */
+  baseline_failures?: string[];
   total_tokens_used?: number;
   usage_incomplete?: boolean;
   last_error?: string;
@@ -283,6 +285,7 @@ export interface AgentRequest {
     requirements: Requirement[];
     acceptance: AcceptanceCondition[];
     decisions: NonNullable<RunState['decisions']>;
+    baseline?: { verification_id: string; failed_commands: string[] };
     failure?: TaskNode['failure_context'];
   };
 }

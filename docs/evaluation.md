@@ -26,7 +26,7 @@ npm run verify:release
 A live smoke starts a prepared run from a DSH agent session and waits for completion:
 
 1. create a temporary Git repository with `spec.md`, `task-graph.json` and a `delivery.yaml` using `verification.execution.backend: trusted-host`;
-2. call `delivery_start` with a run id;
+2. call `delivery_start` with a run id and `allow_trusted_host: true` after explicitly approving host execution;
 3. let DSH subagent workers implement the task;
 4. confirm verification, integration and acceptance;
 5. inspect `run.json`, `completion.json`, the decision log and the worktree.

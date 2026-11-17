@@ -7,6 +7,7 @@ import { compileVerificationPlan } from './verification-planner.js';
 import { evaluateAcceptance } from './acceptance.js';
 import { blockingFindings } from './review-cycle.js';
 import { failureFingerprint } from '../scheduler/failure-fingerprint.js';
+import { durationExceeded } from '../runtime/loop-guards.js';
 import { promotePendingTasks, selectReadyTasks } from '../scheduler/scheduler.js';
 import { assertRunTransition, assertTaskTransition } from '../scheduler/state-machine.js';
 import { StateStore } from '../state/state-store.js';
@@ -26,6 +27,7 @@ import type { ResolvedSkill } from '../capabilities/skill-resolver.js';
 import type { WorkerAdapter } from '../workers/worker-adapter.js';
 import type { VerificationRequest } from '../verification/command-runner.js';
 import { validateTaskGraph } from '../domain/schemas.js';
+import { validateDeliveryContract } from '../domain/contract.js';
 import { missingRequiredOutputs } from './required-outputs.js';
 import { recordDecision } from './decision-journal.js';
 
@@ -104,6 +106,35 @@ function taskRequiresReview(task: TaskNode, config: RunState['config']): boolean
   return task.review_policy === 'risk-based' && ['high', 'critical'].includes(task.risk);
 }
 
+function normalizeBlockers(
+  taskId: string,
+  summary: string,
+  blockers: AgentResult['blockers'],
+): AgentResult['blockers'] {
+  const valid = blockers
+    .filter((blocker) => typeof blocker.decision_id === 'string' && blocker.decision_id.length > 0)
+    .map((blocker) => ({
+      ...blocker,
+      affected_task_ids: blocker.affected_task_ids.length > 0
+        ? blocker.affected_task_ids
+        : [taskId],
+    }));
+  if (valid.length > 0) {
+    return valid;
+  }
+  // A blocked worker that supplies no structured decision would otherwise put
+  // the run into WAITING_HUMAN with no answerable decision at all. Synthesize a
+  // decision from its summary so a human always has a way forward.
+  const decisionId = `BLOCKED-${taskId}-${createHash('sha256').update(summary).digest('hex').slice(0, 8)}`;
+  return [{
+    decision_id: decisionId,
+    type: 'requirement',
+    question: `Worker 报告阻塞：${summary || '未提供原因'}。请提供处理意见后重新调度该任务。`,
+    options: ['retry', 'cancel'],
+    affected_task_ids: [taskId],
+  }];
+}
+
 function changeTask(state: RunState, taskId: string, status: TaskStatus): void {
   const task = state.graph.tasks.find((candidate) => candidate.id === taskId);
   if (task === undefined) {
@@ -161,6 +192,76 @@ function createFixTask(
   return fix;
 }
 
+const APPROVAL_RESPONSES = new Set([
+  'approve', 'approved', 'yes', 'confirm', 'confirmed', '通过', '确认', '同意', '验收通过', '已通过',
+]);
+
+function isApprovalResponse(response: string): boolean {
+  return APPROVAL_RESPONSES.has(response.trim().toLowerCase());
+}
+
+function uniqueTaskId(state: RunState, base: string): string {
+  let candidate = base;
+  let suffix = 2;
+  while (state.graph.tasks.some((task) => task.id === candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+/**
+ * Turn a rejected manual acceptance into an actionable repair task instead of
+ * leaving the run waiting with no way to rework the deliverable.
+ */
+function createManualAcceptanceRepair(
+  state: RunState,
+  conditionId: string,
+  feedback: string,
+): { task?: TaskNode; exhausted?: string } {
+  const condition = (state.graph.acceptance ?? []).find((candidate) => candidate.id === conditionId);
+  if (condition === undefined) {
+    return { exhausted: `unknown manual acceptance condition: ${conditionId}` };
+  }
+  const sources = state.graph.tasks.filter(
+    (task) => task.status === 'DONE' && task.requirement_ids.includes(condition.requirement_id),
+  );
+  const depth = sources.reduce((maximum, task) => Math.max(maximum, task.dynamic_depth ?? 0), 0);
+  if (depth >= state.config.runtime.max_dynamic_depth) {
+    return { exhausted: 'dynamic task depth exhausted for manual acceptance repair' };
+  }
+  const hash = createHash('sha256')
+    .update(`${state.run_id}:${conditionId}:${feedback}:${state.graph.tasks.length}`)
+    .digest('hex')
+    .slice(0, 10);
+  const id = uniqueTaskId(state, `FIX-${hash}`);
+  const task: TaskNode = {
+    id,
+    type: 'review_fix',
+    title: `修复人工验收问题：${conditionId}`,
+    status: 'READY',
+    priority: 'high',
+    risk: 'high',
+    origin: 'acceptance_gap',
+    depends_on: [],
+    requirement_ids: [condition.requirement_id],
+    acceptance_ids: [conditionId],
+    scope_paths: [...new Set(sources.flatMap((source) => source.scope_paths))],
+    required_outputs: [],
+    worker_role: 'implementer',
+    capability_profile: state.config.profile,
+    attempt: 0,
+    max_attempts: state.config.runtime.max_task_attempts,
+    verification_commands: [...new Set(sources.flatMap((source) => source.verification_commands))],
+    review_policy: 'risk-based',
+    dynamic_depth: depth + 1,
+    ...(sources[0] === undefined ? {} : { repairs_task_id: sources[0].id }),
+    ...(state.integration_worktree === undefined ? {} : { seed_worktree: state.integration_worktree }),
+    failure_context: { summary: `人工验收未通过：${feedback}` },
+  };
+  return { task };
+}
+
 export class DeliveryController {
   private readonly options: DeliveryControllerOptions;
   private evidence: EvidenceRecord[] = [];
@@ -192,6 +293,10 @@ export class DeliveryController {
     if (!validation.ok) {
       throw new Error(`invalid task graph: ${validation.errors.join('; ')}`);
     }
+    const contractErrors = validateDeliveryContract(current.graph, current.config);
+    if (contractErrors.length > 0) {
+      throw new Error(`invalid delivery contract: ${contractErrors.join('; ')}`);
+    }
     let state = current;
     if (
       current.config.verification.baseline &&
@@ -214,6 +319,7 @@ export class DeliveryController {
           data: { commands },
         });
       }
+      const failedBaselineCommands: string[] = [];
       for (const command of commands) {
         const evidence = await this.runVerification({
           run_id: runId,
@@ -242,6 +348,7 @@ export class DeliveryController {
           return await this.blockVerificationError(latest, evidence);
         }
         if (evidence.result === 'failed') {
+          failedBaselineCommands.push(command);
           await recordDecision(this.options.store, {
             run_id: runId,
             phase: 'prepare',
@@ -263,13 +370,18 @@ export class DeliveryController {
           data: { baseline_id: baselineId, commands: commands.length },
         });
       }
-      state = { ...current, baseline_verification_id: baselineId };
+      state = {
+        ...current,
+        baseline_verification_id: baselineId,
+        baseline_failures: failedBaselineCommands,
+      };
     }
     state = await this.updateRun(runId, (draft) => {
       if (draft.status === 'CANCELLED') return draft;
       changeRun(draft, 'RUNNING');
       if (state.baseline_verification_id !== undefined) {
         draft.baseline_verification_id = state.baseline_verification_id;
+        draft.baseline_failures = state.baseline_failures ?? [];
       }
       return draft;
     });
@@ -408,11 +520,20 @@ export class DeliveryController {
     });
     const beforePrepareCancelled = await this.cancelTaskIfRunCancelled(state.run_id, taskId);
     if (beforePrepareCancelled !== undefined) return beforePrepareCancelled;
-    const workspace = await this.options.worktrees.prepare(
-      state,
-      task,
-      task.seed_worktree ?? state.integration_worktree,
-    );
+    let workspace: TaskWorkspace;
+    try {
+      workspace = await this.options.worktrees.prepare(
+        state,
+        task,
+        task.seed_worktree ?? state.integration_worktree,
+      );
+    } catch (error) {
+      return await this.blockTaskForViolation(
+        state,
+        taskId,
+        `worktree preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     let snapshot = await this.options.snapshots.create(
       workspace.path,
       state.baseline_commit ?? 'HEAD',
@@ -467,11 +588,12 @@ export class DeliveryController {
       return cancelledAfterWorker;
     }
     if (result.status === 'blocked') {
+      const blockers = normalizeBlockers(taskId, result.summary, result.blockers);
       state = await this.updateRun(state.run_id, (draft) => {
-        draft.pending_decision_ids = [...new Set([...draft.pending_decision_ids, ...result.blockers.map((blocker) => blocker.decision_id)])];
-        draft.decision_blockers = [...(draft.decision_blockers ?? []), ...result.blockers];
+        draft.pending_decision_ids = [...new Set([...draft.pending_decision_ids, ...blockers.map((blocker) => blocker.decision_id)])];
+        draft.decision_blockers = [...(draft.decision_blockers ?? []), ...blockers];
         draft.pending_decision_tasks ??= {};
-        for (const blocker of result.blockers) {
+        for (const blocker of blockers) {
           draft.pending_decision_tasks[blocker.decision_id] = blocker.affected_task_ids;
         }
         changeTask(draft, taskId, 'INTERRUPTED');
@@ -487,7 +609,7 @@ export class DeliveryController {
         detail: result.summary,
         outcome: 'waiting',
         task_id: taskId,
-        data: { blockers: result.blockers },
+        data: { blockers },
       });
       return state;
     }
@@ -703,12 +825,13 @@ export class DeliveryController {
         return await this.blockTaskForViolation(state, taskId, 'reviewer mutated source content');
       }
       if (reviewResult.status === 'blocked') {
+        const reviewBlockers = normalizeBlockers(taskId, reviewResult.summary, reviewResult.blockers);
         state = await this.updateRun(state.run_id, (draft) => {
           changeTask(draft, taskId, 'INTERRUPTED');
-          draft.pending_decision_ids = [...new Set([...draft.pending_decision_ids, ...reviewResult.blockers.map((blocker) => blocker.decision_id)])];
-          draft.decision_blockers = [...(draft.decision_blockers ?? []), ...reviewResult.blockers];
+          draft.pending_decision_ids = [...new Set([...draft.pending_decision_ids, ...reviewBlockers.map((blocker) => blocker.decision_id)])];
+          draft.decision_blockers = [...(draft.decision_blockers ?? []), ...reviewBlockers];
           draft.pending_decision_tasks ??= {};
-          for (const blocker of reviewResult.blockers) {
+          for (const blocker of reviewBlockers) {
             draft.pending_decision_tasks[blocker.decision_id] = blocker.affected_task_ids;
           }
           draft.current_task_ids = draft.current_task_ids.filter((id) => id !== taskId);
@@ -723,7 +846,7 @@ export class DeliveryController {
           detail: reviewResult.summary,
           outcome: 'waiting',
           task_id: taskId,
-          data: { blockers: reviewResult.blockers },
+          data: { blockers: reviewBlockers },
         });
         return state;
       }
@@ -984,6 +1107,14 @@ export class DeliveryController {
         requirements: state.graph.requirements ?? [],
         acceptance: state.graph.acceptance ?? [],
         decisions: state.decisions ?? [],
+        ...(state.baseline_verification_id === undefined
+          ? {}
+          : {
+            baseline: {
+              verification_id: state.baseline_verification_id,
+              failed_commands: state.baseline_failures ?? [],
+            },
+          }),
         ...(task.failure_context === undefined ? {} : { failure: task.failure_context }),
       },
       timeout_seconds: state.config.runtime.default_worker_timeout_seconds,
@@ -1261,9 +1392,8 @@ export class DeliveryController {
             const source = sources.length === 1 ? sources[0] : undefined;
             const dynamicTaskCount = draft.graph.tasks.filter(task => task.origin !== 'initial_plan').length;
             const effectiveMaxAttempts = source === undefined ? 0 : Math.min(source.max_attempts, draft.config.runtime.max_task_attempts);
-            const priorAcceptanceRepair = source !== undefined && draft.graph.tasks.some(task => task.origin === 'acceptance_gap' && task.verification_commands.includes(check.command) && task.repairs_task_id === source.id && task.status !== 'CANCELLED');
-            if (source === undefined || source.attempt + 1 >= effectiveMaxAttempts || priorAcceptanceRepair || dynamicTaskCount >= draft.config.runtime.max_dynamic_tasks || (source.dynamic_depth ?? 0) >= draft.config.runtime.max_dynamic_depth) {
-              draft.last_error = 'final verification failed; repair target unavailable, duplicate repair, or budget exhausted';
+            if (source === undefined || source.attempt + 1 >= effectiveMaxAttempts || dynamicTaskCount >= draft.config.runtime.max_dynamic_tasks || (source.dynamic_depth ?? 0) >= draft.config.runtime.max_dynamic_depth) {
+              draft.last_error = 'final verification failed; repair target unavailable or budget exhausted';
               changeRun(draft, 'BLOCKED');
               return draft;
             }
@@ -1295,11 +1425,59 @@ export class DeliveryController {
     }
     const latestSnapshot = state.integration_snapshot_id ?? state.graph.tasks.at(-1)?.code_snapshot_id;
     const persistedEvidence = await this.evidenceLedger?.readAll(state.run_id);
-    const result = evaluateAcceptance(
-      state.graph,
-      persistedEvidence ?? this.evidence,
-      latestSnapshot,
+    const acceptanceEvidence = persistedEvidence ?? this.evidence;
+    const artifactConditions = (state.graph.acceptance ?? []).filter(
+      (condition) => condition.mandatory && condition.verification.type === 'artifact',
     );
+    if (artifactConditions.length > 0 && latestSnapshot !== undefined) {
+      const artifactConditionIds = artifactConditions.map((condition) => condition.id);
+      const alreadyChecked = acceptanceEvidence.some(
+        (record) =>
+          record.command === 'artifact-check' &&
+          record.result === 'passed' &&
+          record.code_snapshot_id === latestSnapshot &&
+          artifactConditionIds.every((id) => record.acceptance_ids.includes(id)),
+      );
+      if (!alreadyChecked) {
+        let passed = false;
+        if (state.delivery_artifact !== undefined) {
+          try {
+            const content = await readFile(state.delivery_artifact.path, 'utf8');
+            passed = createHash('sha256').update(content).digest('hex') === state.delivery_artifact.sha256;
+          } catch {
+            passed = false;
+          }
+        }
+        const record: EvidenceRecord = {
+          id: `E-${createHash('sha256').update(`${state.run_id}:artifact-check:${latestSnapshot}`).digest('hex').slice(0, 16)}`,
+          run_id: state.run_id,
+          task_id: 'FINAL-VERIFICATION',
+          acceptance_ids: artifactConditionIds,
+          code_snapshot_id: latestSnapshot,
+          command: 'artifact-check',
+          cwd: state.integration_worktree ?? state.repo_root,
+          started_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          exit_code: passed ? 0 : 1,
+          stdout_path: '',
+          stderr_path: '',
+          result: passed ? 'passed' : 'failed',
+        };
+        acceptanceEvidence.push(record);
+        this.evidence.push(record);
+        await this.evidenceLedger?.append(record);
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'accept',
+          code: passed ? 'artifact_check_passed' : 'artifact_check_failed',
+          title: passed ? '交付产物校验通过' : '交付产物校验失败',
+          detail: passed ? state.delivery_artifact?.path ?? '' : 'delivery artifact is missing or its digest does not match',
+          outcome: passed ? 'pass' : 'fail',
+          data: { artifact: state.delivery_artifact ?? null, snapshot_id: latestSnapshot },
+        });
+      }
+    }
+    const result = evaluateAcceptance(state.graph, acceptanceEvidence, latestSnapshot);
     if (result.status === 'WAITING_HUMAN') {
       await recordDecision(this.options.store, {
         run_id: state.run_id,
@@ -1312,18 +1490,31 @@ export class DeliveryController {
       });
       return await this.updateRun(state.run_id, (draft) => {
         changeRun(draft, 'WAITING_HUMAN');
-        const decisionIds = (draft.graph.acceptance ?? [])
-          .filter(
-            (condition) =>
-              condition.mandatory &&
-              condition.verification.type !== 'command' &&
-              condition.verification.type !== 'test',
-          )
+        const manualConditions = (draft.graph.acceptance ?? []).filter(
+          (condition) => condition.mandatory && condition.verification.type === 'manual',
+        );
+        const manualIds = new Set(manualConditions.map((condition) => condition.id));
+        const approved = new Set(
+          manualConditions
+            .filter((condition) =>
+              acceptanceEvidence.some(
+                (record) =>
+                  record.command === 'manual-approval' &&
+                  record.result === 'passed' &&
+                  record.acceptance_ids.includes(condition.id) &&
+                  (latestSnapshot === undefined || record.code_snapshot_id === latestSnapshot),
+              ),
+            )
+            .map((condition) => condition.id),
+        );
+        const retained = draft.pending_decision_ids.filter((id) => !manualIds.has(id));
+        const pendingManual = manualConditions
+          .filter((condition) => !approved.has(condition.id))
           .map((condition) => condition.id);
-        draft.pending_decision_ids =
-          decisionIds.length > 0
-            ? decisionIds
-            : result.reasons.map((_reason, index) => `ACCEPTANCE-${index + 1}`);
+        const merged = [...new Set([...retained, ...pendingManual])];
+        draft.pending_decision_ids = merged.length > 0
+          ? merged
+          : result.reasons.map((_reason, index) => `ACCEPTANCE-${index + 1}`);
         return draft;
       });
     }
@@ -1333,7 +1524,7 @@ export class DeliveryController {
         if (createHash('sha256').update(content).digest('hex') !== state.delivery_artifact.sha256) throw new Error('accepted patch artifact digest mismatch');
         await this.options.store.writeArtifact(state.run_id, state.config.git.final_artifact, content);
       }
-      const currentEvidence = (persistedEvidence ?? this.evidence).filter(record => record.code_snapshot_id === latestSnapshot);
+      const currentEvidence = acceptanceEvidence.filter(record => record.code_snapshot_id === latestSnapshot);
       const reportState = structuredClone(state);
       reportState.status = 'COMPLETED';
       for (const requirement of reportState.graph.requirements ?? []) requirement.status = 'SATISFIED';
@@ -1407,29 +1598,117 @@ export class DeliveryController {
     return state;
   }
 
-  async resume(runId: string): Promise<RunState> {
+  async resume(
+    runId: string,
+    options: {
+      max_total_tokens?: number;
+      max_duration_hours?: number;
+      max_task_attempts?: number;
+    } = {},
+  ): Promise<RunState> {
+    let current = await this.requireRun(runId);
+    if (['COMPLETED', 'CANCELLED'].includes(current.status)) {
+      return current;
+    }
+    if (
+      options.max_total_tokens !== undefined ||
+      options.max_duration_hours !== undefined ||
+      options.max_task_attempts !== undefined
+    ) {
+      current = await this.updateRun(runId, (draft) => {
+        if (options.max_total_tokens !== undefined) {
+          if (!Number.isInteger(options.max_total_tokens) || options.max_total_tokens <= draft.config.runtime.max_total_tokens) {
+            throw new Error('max_total_tokens can only be increased on resume');
+          }
+          draft.config.runtime.max_total_tokens = options.max_total_tokens;
+        }
+        if (options.max_duration_hours !== undefined) {
+          if (!(options.max_duration_hours > draft.config.runtime.max_duration_hours)) {
+            throw new Error('max_duration_hours can only be increased on resume');
+          }
+          draft.config.runtime.max_duration_hours = options.max_duration_hours;
+        }
+        if (options.max_task_attempts !== undefined) {
+          if (!Number.isInteger(options.max_task_attempts) || options.max_task_attempts <= draft.config.runtime.max_task_attempts) {
+            throw new Error('max_task_attempts can only be increased on resume');
+          }
+          draft.config.runtime.max_task_attempts = options.max_task_attempts;
+        }
+        return draft;
+      });
+    }
+    if (current.status === 'WAITING_HUMAN' && current.pending_decision_ids.length > 0) {
+      throw new Error('run is waiting for human decisions; answer the pending decisions before resuming');
+    }
+    if (durationExceeded(current)) {
+      throw new Error(
+        `maximum run duration exceeded; resume with a larger max_duration_hours or start a new run`,
+      );
+    }
+    if ((current.total_tokens_used ?? 0) > current.config.runtime.max_total_tokens) {
+      throw new Error(
+        'token budget exceeded; resume with a larger max_total_tokens or start a new run',
+      );
+    }
+    let requeued: string[] = [];
+    let remainingBlocked = false;
     const state = await this.updateRun(runId, (draft) => {
       draft.pause_requested = false;
-      if (draft.status === 'PAUSED' || draft.status === 'BLOCKED' || draft.status === 'QUEUED') {
-        for (const task of draft.graph.tasks) {
-          const unresolved = draft.pending_decision_ids.some(id => (draft.pending_decision_tasks?.[id] ?? []).includes(task.id));
-          if (task.status === 'BLOCKED' && task.failure_context?.evidence?.result === 'error' && !unresolved) {
-            if (task.workspace_path !== undefined) task.seed_worktree = task.workspace_path;
-            changeTask(draft, task.id, 'READY');
-          }
+      const candidates = draft.status === 'PAUSED' || draft.status === 'BLOCKED' || draft.status === 'QUEUED' || draft.status === 'WAITING_HUMAN';
+      if (!candidates) {
+        return draft;
+      }
+      for (const task of draft.graph.tasks) {
+        const unresolved = draft.pending_decision_ids.some(
+          (id) => (draft.pending_decision_tasks?.[id] ?? []).includes(task.id),
+        );
+        if (unresolved) continue;
+        const effectiveMaxAttempts = Math.min(task.max_attempts, draft.config.runtime.max_task_attempts);
+        if (task.status === 'BLOCKED' && task.attempt < effectiveMaxAttempts) {
+          if (task.workspace_path !== undefined) task.seed_worktree = task.workspace_path;
+          task.attempt += 1;
+          changeTask(draft, task.id, 'READY');
+          requeued.push(task.id);
+        } else if (task.status === 'BLOCKED') {
+          remainingBlocked = true;
+        } else if (task.status === 'INTERRUPTED') {
+          changeTask(draft, task.id, 'READY');
+          requeued.push(task.id);
         }
+      }
+      const allDone = draft.graph.tasks.every(
+        (task) => task.status === 'DONE' || task.status === 'CANCELLED',
+      );
+      const hasReady = draft.graph.tasks.some((task) => task.status === 'READY');
+      if (hasReady || allDone) {
         changeRun(draft, 'RUNNING');
+        delete draft.last_error;
+      } else if (remainingBlocked) {
+        draft.last_error = 'retry or dynamic task budget is exhausted; resume with a larger budget or start a new run';
+      } else {
+        draft.last_error = 'no task can be resumed; check pending dependencies and decisions';
       }
       return draft;
     });
     await recordDecision(this.options.store, {
       run_id: runId,
       phase: 'lifecycle',
-      code: 'resume_requested',
-      title: '收到人工恢复请求',
-      detail: `运行状态：${state.status}`,
-      outcome: 'info',
+      code: state.status === 'RUNNING' ? 'resume_requested' : 'resume_blocked',
+      title: state.status === 'RUNNING' ? '收到人工恢复请求' : '人工恢复未找到可调度的任务',
+      detail: `运行状态：${state.status}；重新排队：${requeued.join(', ') || '(none)'}。`,
+      outcome: state.status === 'RUNNING' ? 'info' : 'blocked',
+      data: {
+        requeued,
+        overrides: {
+          max_total_tokens: options.max_total_tokens ?? null,
+          max_duration_hours: options.max_duration_hours ?? null,
+          max_task_attempts: options.max_task_attempts ?? null,
+        },
+      },
     });
+    if (state.status !== 'RUNNING') {
+      throw new Error(state.last_error ?? 'run cannot be resumed');
+    }
     return state;
   }
 
@@ -1469,22 +1748,68 @@ export class DeliveryController {
       (condition) => condition.id === decisionId,
     );
     if (acceptanceCondition?.verification.type === 'manual') {
-      const normalized = response.trim().toLowerCase();
-      if (!['approve', 'approved', 'yes', 'confirm', 'confirmed', '通过', '确认', '同意'].includes(normalized)) {
+      if (!isApprovalResponse(response)) {
+        let repairTaskId: string | undefined;
+        let blockedReason: string | undefined;
+        state = await this.updateRun(runId, (draft) => {
+          if (draft.status === 'CANCELLED') return draft;
+          const dynamicTaskCount = draft.graph.tasks.filter(
+            (task) => task.origin !== 'initial_plan',
+          ).length;
+          if (dynamicTaskCount >= draft.config.runtime.max_dynamic_tasks) {
+            blockedReason = 'dynamic task budget exhausted; manual acceptance remains pending';
+            draft.last_error = blockedReason;
+            return draft;
+          }
+          const repair = createManualAcceptanceRepair(draft, decisionId, response);
+          if (repair.task === undefined) {
+            blockedReason = repair.exhausted ?? 'manual acceptance repair is unavailable';
+            draft.last_error = blockedReason;
+            return draft;
+          }
+          repairTaskId = repair.task.id;
+          draft.graph.tasks.push(repair.task);
+          draft.pending_decision_ids = draft.pending_decision_ids.filter((id) => id !== decisionId);
+          if (draft.pending_decision_tasks !== undefined) {
+            delete draft.pending_decision_tasks[decisionId];
+          }
+          draft.decision_blockers = (draft.decision_blockers ?? []).filter(
+            (blocker) => blocker.decision_id !== decisionId,
+          );
+          draft.decisions = [
+            ...(draft.decisions ?? []),
+            {
+              decision_id: decisionId,
+              response: `rejected: ${response}`,
+              answered_at: new Date().toISOString(),
+            },
+          ];
+          if (draft.pending_decision_ids.length === 0) {
+            changeRun(draft, 'RUNNING');
+          }
+          return draft;
+        });
         await this.options.store.appendEvent(runId, {
           type: 'human_decision',
           decision_id: decisionId,
           response,
           accepted: false,
+          ...(repairTaskId === undefined ? {} : { repair_task_id: repairTaskId }),
         });
         await recordDecision(this.options.store, {
           run_id: runId,
           phase: 'human',
-          code: 'human_decision_rejected',
-          title: `人工验收未通过：${decisionId}`,
-          detail: response,
-          outcome: 'fail',
-          data: { decision_id: decisionId, response },
+          code: repairTaskId === undefined ? 'acceptance_repair_blocked' : 'acceptance_repair_created',
+          title: repairTaskId === undefined
+            ? `人工验收未通过，但无法创建返工任务：${decisionId}`
+            : `人工验收未通过，已创建返工任务：${repairTaskId}`,
+          detail: blockedReason ?? response,
+          outcome: repairTaskId === undefined ? 'blocked' : 'fail',
+          data: {
+            decision_id: decisionId,
+            response,
+            ...(repairTaskId === undefined ? {} : { repair_task_id: repairTaskId }),
+          },
         });
         return state;
       }

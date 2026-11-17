@@ -33,6 +33,7 @@
     "scripts",
     "skills",
     "README.md",
+    "readme-cn.md",
     "LICENSE",
     "docs/*.md",
     "docs/design/*.md"

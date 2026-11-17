@@ -50,8 +50,8 @@ function runState(repo: string, graph: TaskGraph, status: RunState['status'] = '
     run_id: 'run-1',
     status,
     repo_root: repo,
-    created_at: '2026-10-28T00:00:00.000Z',
-    updated_at: '2026-10-28T00:00:00.000Z',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
     config,
     graph,
     current_task_ids: [],
@@ -413,7 +413,7 @@ test('real manual acceptance decision id is directly answerable', async () => {
   assert.equal(completed.status, 'COMPLETED');
 });
 
-test('manual rejection keeps the run waiting and records no approval', async () => {
+test('manual rejection creates an acceptance repair task and records no approval', async () => {
   const { controller, store } = await setupController(completedWorker(), true, [
     {
       id: 'AC-1',
@@ -429,8 +429,13 @@ test('manual rejection keeps the run waiting and records no approval', async () 
 
   const rejected = await controller.respond('run-1', 'AC-1', 'rejected: not acceptable');
 
-  assert.equal(rejected.status, 'WAITING_HUMAN');
-  assert.deepEqual(rejected.pending_decision_ids, ['AC-1']);
+  assert.equal(rejected.status, 'RUNNING');
+  assert.deepEqual(rejected.pending_decision_ids, []);
+  const repair = rejected.graph.tasks.find((candidate) => candidate.origin === 'acceptance_gap');
+  assert.ok(repair);
+  assert.equal(repair.status, 'READY');
+  assert.match(repair.failure_context?.summary ?? '', /not acceptable/);
+  assert.equal(rejected.decisions?.at(-1)?.decision_id, 'AC-1');
 });
 
 test('final independent review runs before completion when configured', async () => {
@@ -611,4 +616,107 @@ test('cancel fences integration after an in-flight worker returns', async () => 
   assert.equal(state.graph.tasks[0]?.status, 'CANCELLED');
   assert.equal(integrations, 0);
   assert.equal(aborted, true);
+});
+
+test('resume requeues scope-blocked tasks within the attempt budget', async () => {
+  const { controller } = await setupController(completedWorker(), true, [], [
+    { ...task('TASK-1'), review_policy: 'none' },
+  ]);
+  const runtime = controller as unknown as {
+    options: { snapshots: { changedFiles?: (workdir: string) => Promise<string[]> } };
+  };
+  runtime.options.snapshots.changedFiles = async () => ['outside/secret.ts'];
+  const blocked = await controller.tick('run-1');
+  assert.equal(blocked.status, 'BLOCKED');
+
+  const resumed = await controller.resume('run-1');
+
+  assert.equal(resumed.status, 'RUNNING');
+  assert.equal(resumed.graph.tasks[0]?.status, 'READY');
+  assert.equal(resumed.graph.tasks[0]?.attempt, 1);
+});
+
+test('resume can raise the token budget and finish a previously blocked run', async () => {
+  const { controller, store } = await setupController(async (request) => ({
+    ...completedWorker(),
+    task_id: request.task_id,
+    token_usage: 100,
+  }), true);
+  await store.updateRun('run-1', (state) => ({
+    ...state,
+    config: { ...state.config, runtime: { ...state.config.runtime, max_total_tokens: 50 } },
+  }));
+  assert.equal((await controller.tick('run-1')).status, 'BLOCKED');
+
+  const resumed = await controller.resume('run-1', { max_total_tokens: 1_000 });
+  assert.equal(resumed.status, 'RUNNING');
+  assert.equal(resumed.config.runtime.max_total_tokens, 1_000);
+
+  assert.equal((await controller.tick('run-1')).status, 'COMPLETED');
+});
+
+test('resume refuses budget-only decreases and unresolved human decisions', async () => {
+  const { controller, store } = await setupController(completedWorker(), true);
+  await assert.rejects(
+    controller.resume('run-1', { max_total_tokens: 1 }),
+    /can only be increased/i,
+  );
+  await store.updateRun('run-1', (state) => ({
+    ...state,
+    status: 'WAITING_HUMAN',
+    pending_decision_ids: ['AC-1'],
+  }));
+  await assert.rejects(controller.resume('run-1'), /pending decisions/i);
+});
+
+test('worktree preparation failure is surfaced as a blocked decision instead of an opaque runtime error', async () => {
+  const { controller } = await setupController(completedWorker(), true);
+  const runtime = controller as unknown as {
+    options: { worktrees: { prepare: () => Promise<never> } };
+  };
+  runtime.options.worktrees.prepare = async () => {
+    throw new Error('failed to seed task worktree: patch conflict');
+  };
+
+  const state = await controller.tick('run-1');
+
+  assert.equal(state.status, 'BLOCKED');
+  assert.match(state.last_error ?? '', /worktree preparation failed.*patch conflict/i);
+  assert.equal(state.graph.tasks[0]?.status, 'BLOCKED');
+});
+
+test('baseline failures are passed to workers as frozen context', async () => {
+  const seen: Array<{ baseline?: { failed_commands: string[] } }> = [];
+  const { controller, store } = await setupController(async (request) => {
+    seen.push(request.context as never);
+    return completedWorker();
+  }, true);
+  await store.updateRun('run-1', (state) => ({
+    ...state,
+    config: {
+      ...state.config,
+      verification: {
+        ...state.config.verification,
+        baseline: true,
+        commands: { build: [], test: ['baseline-check'], lint: [], e2e: [] },
+      },
+    },
+  }));
+  const runtime = controller as unknown as {
+    options: { verifier: { run: (request: { task_id: string; command: string }) => Promise<unknown> } };
+  };
+  const original = runtime.options.verifier.run;
+  runtime.options.verifier.run = async (request) => {
+    const result = await original(request as never) as { result: string; exit_code: number };
+    if (request.task_id === 'BASELINE') {
+      return { ...result, result: 'failed', exit_code: 1 };
+    }
+    return result;
+  };
+
+  await controller.start('run-1');
+  await controller.tick('run-1');
+
+  const baseline = seen.at(-1)?.baseline;
+  assert.deepEqual(baseline?.failed_commands, ['baseline-check']);
 });

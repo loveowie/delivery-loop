@@ -35,6 +35,12 @@ export interface RunActionInput {
   repo_root?: string | undefined;
 }
 
+export interface ResumeInput extends RunActionInput {
+  max_total_tokens?: number | undefined;
+  max_duration_hours?: number | undefined;
+  max_task_attempts?: number | undefined;
+}
+
 export interface ExportReportInput extends RunActionInput {
   repo_root: string;
 }
@@ -136,9 +142,13 @@ export class DeliveryService {
     return stateStatus(await handle.controller.pause(input.run_id));
   }
 
-  async delivery_resume(input: RunActionInput) {
+  async delivery_resume(input: ResumeInput) {
     const handle = await this.manager.get(input.run_id, input.repo_root);
-    const state = await handle.controller.resume(input.run_id);
+    const state = await handle.controller.resume(input.run_id, {
+      ...(typeof input.max_total_tokens === 'number' ? { max_total_tokens: input.max_total_tokens } : {}),
+      ...(typeof input.max_duration_hours === 'number' ? { max_duration_hours: input.max_duration_hours } : {}),
+      ...(typeof input.max_task_attempts === 'number' ? { max_task_attempts: input.max_task_attempts } : {}),
+    });
     handle.state = state;
     await this.manager.wake?.(handle);
     return stateStatus(state);

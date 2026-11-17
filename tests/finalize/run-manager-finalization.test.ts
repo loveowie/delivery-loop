@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_CONFIG } from '../../src/config/config.js';
@@ -47,7 +47,7 @@ test('commit recovery recognizes the run-owned commit after result persistence f
       finalizeRun(
         f.store,
         'run-1',
-        { mode: 'commit', confirmation: 'run-1' },
+        { mode: 'commit', confirmation: 'run-1:commit' },
         async (action, _state, context) => {
           await f.manager.executeFinalize(action, f.handle, context);
           throw new Error('crash after git commit');
@@ -60,7 +60,7 @@ test('commit recovery recognizes the run-owned commit after result persistence f
     await finalizeRun(
       f.store,
       'run-1',
-      { mode: 'commit', confirmation: 'run-1' },
+      { mode: 'commit', confirmation: 'run-1:commit' },
       async (action, _state, context) => await f.manager.executeFinalize(action, f.handle, context),
     );
 
@@ -83,7 +83,7 @@ test('branch finalization rejects a conflicting pre-existing branch', async () =
       finalizeRun(
         f.store,
         'run-1',
-        { mode: 'branch', confirmation: 'run-1' },
+        { mode: 'branch', confirmation: 'run-1:branch' },
         async (action, _state, context) => await f.manager.executeFinalize(action, f.handle, context),
       ),
       /branch already exists/i,
@@ -103,7 +103,7 @@ test('push recovery accepts the exact remote ref written before result persisten
       finalizeRun(
         f.store,
         'run-1',
-        { mode: 'push', confirmation: 'run-1' },
+        { mode: 'push', confirmation: 'run-1:push' },
         async (action, _state, context) => {
           await f.manager.executeFinalize(action, f.handle, context);
           throw new Error('crash after git push');
@@ -118,7 +118,7 @@ test('push recovery accepts the exact remote ref written before result persisten
     await finalizeRun(
       f.store,
       'run-1',
-      { mode: 'push', confirmation: 'run-1' },
+      { mode: 'push', confirmation: 'run-1:push' },
       async (action, _state, context) => await f.manager.executeFinalize(action, f.handle, context),
     );
 
@@ -129,5 +129,43 @@ test('push recovery accepts the exact remote ref written before result persisten
   } finally {
     await f.fixture.cleanup();
     await rm(remote, { recursive: true, force: true });
+  }
+});
+
+test('commit finalization parks the detached commit on a durable delivery ref', async () => {
+  const f = await finalizationFixture();
+  try {
+    await finalizeRun(
+      f.store,
+      'run-1',
+      { mode: 'commit', confirmation: 'run-1:commit' },
+      async (action, _state, context) => await f.manager.executeFinalize(action, f.handle, context),
+    );
+    const head = (await f.fixture.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const ref = (await f.fixture.git(['rev-parse', 'refs/delivery/run-1'])).stdout.trim();
+    assert.equal(ref, head);
+  } finally {
+    await f.fixture.cleanup();
+  }
+});
+
+test('commit finalization never runs repository hooks from delivered content', async () => {
+  const f = await finalizationFixture();
+  try {
+    await mkdir(join(f.fixture.path, 'hooks'), { recursive: true });
+    await writeFile(join(f.fixture.path, 'hooks', 'pre-commit'), '#!/bin/sh\ntouch hook-ran\n', { mode: 0o755 });
+    await f.fixture.git(['config', 'core.hooksPath', 'hooks']);
+    const snapshot = await createCodeSnapshot(f.fixture.path);
+    f.handle.state = await f.store.updateRun('run-1', (draft) => ({ ...draft, integration_snapshot_id: snapshot.id }));
+    await finalizeRun(
+      f.store,
+      'run-1',
+      { mode: 'commit', confirmation: 'run-1:commit' },
+      async (action, _state, context) => await f.manager.executeFinalize(action, f.handle, context),
+    );
+    const { access } = await import('node:fs/promises');
+    await assert.rejects(access(join(f.fixture.path, 'hook-ran')));
+  } finally {
+    await f.fixture.cleanup();
   }
 });

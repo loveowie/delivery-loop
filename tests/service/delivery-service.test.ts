@@ -191,7 +191,7 @@ test('prepare-only finalize succeeds without executing commit', async () => {
   const result = await serviceWithSpy.delivery_finalize({
     run_id: 'run-1',
     mode: 'prepare-only',
-    confirmation: 'run-1',
+    confirmation: 'run-1:prepare-only',
   });
 
   assert.equal(result.status, 'prepare-only');

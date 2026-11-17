@@ -1,5 +1,7 @@
 # Delivery Loop
 
+English | [简体中文](readme-cn.md)
+
 Delivery Loop is a native **DeepSeek Harness (DSH)** plugin for resumable end-to-end software delivery. It turns an approved specification into a persistent task DAG, runs each task in a fresh DSH subagent, verifies the resulting content, turns test and review failures into new tasks, and continues until acceptance passes or a human decision is required.
 
 The plugin runs entirely inside DSH:
@@ -19,6 +21,106 @@ The plugin runs entirely inside DSH:
 - Evidence persisted per code snapshot, with invalidation after integration changes.
 - Isolated Git worktrees, Patch-based integration and `prepare-only` delivery by default.
 - A durable decision journal and changed-file records for the view.
+
+## Architecture and run flow
+
+Delivery Loop separates **deciding** from **doing**. The Host controller owns the plan, budgets, and state; every unit of work is a disposable, fresh-context DSH subagent. Nothing important lives only in a model's context — each transition is persisted, each result is verified independently, and each failure becomes a task rather than a silent retry.
+
+> The diagrams below use Mermaid, which GitHub renders inline.
+
+### Layers
+
+```mermaid
+flowchart TB
+  agent["DSH Agent session"]
+  web["DSH Web page · client.js<br/>composer strip · delivery view · settings"]
+
+  subgraph host["DSH Host plugin · dist/dsh/host.js"]
+    t["deliver-change Skill · system prompt ·<br/>10 native delivery_* tools"]
+    s1["DeliveryService<br/>start / status / respond / control / finalize"]
+    s3["DeliveryRunManager<br/>queue · in-process loop · recovery"]
+    s4["DeliveryController<br/>tick · task lifecycle · evidence · acceptance"]
+    h3["View API · per-process token"]
+    s2["DeliveryViewService<br/>runs · detail · files · diff"]
+  end
+
+  subgraph exec["Execution surface · inside the Host process"]
+    e1["Worker adapter<br/>ctx.subagents.startActivation"]
+    e2["WorktreeManager<br/>isolated worktrees"]
+    e3["CommandRunner<br/>container / trusted host"]
+    e4["PatchIntegrator<br/>patch integration"]
+  end
+
+  subgraph store["Persistent state · .delivery/ in the target repository"]
+    st1["run.json · events.jsonl · evidence/"]
+    st2["reports/final.md · delivery.patch"]
+  end
+
+  agent --> t
+  web --> h3
+  t --> s1
+  h3 --> s2
+  s2 --> st1
+  s1 --> s3
+  s3 --> s4
+  s4 --> e1
+  s4 --> e2
+  s4 --> e3
+  s4 --> e4
+  s4 --> st1
+  e4 --> st2
+```
+
+### End-to-end run flow
+
+```mermaid
+flowchart TD
+  u["User requests an end-to-end delivery"] --> sk["deliver-change Skill intake<br/>confirm goal · scope · acceptance · verification · Git · budget"]
+  sk --> pr[".delivery/prepared/&lt;draft-id&gt;/<br/>spec.md · task-graph.json · delivery.yaml"]
+  pr --> ap{"User approves the<br/>scope and acceptance summary?"}
+  ap -->|"reject"| sk
+  ap -->|"approve"| st["delivery_start<br/>acyclic graph · satisfiable requirements · full coverage"]
+  st --> bl["Preflight, baseline and queueing<br/>Git · runtime · verification backend · repository and worker locks"]
+  bl --> tick["Controller tick<br/>in the Host process"]
+  tick --> sch["Schedule ready tasks<br/>dependencies met · priority · non-overlapping scope · worker cap"]
+  sch --> tp["Task pipeline<br/>execute → verify → review → integrate"]
+  tp --> tick
+  tick --> acc{"Every mandatory acceptance condition<br/>has evidence at the current snapshot?"}
+  acc -->|"yes"| done["COMPLETED"]
+  acc -->|"needs a human answer"| wh["WAITING_HUMAN"]
+  acc -->|"no"| fix["Repair task created, or BLOCKED when budgets are exhausted"]
+  wh -->|"delivery_respond"| tick
+  fix -->|"delivery_resume raises budgets"| tick
+  done --> fin["delivery_export_report → reports/final.md<br/>delivery_finalize (&lt;run-id&gt;:&lt;mode&gt;, prepare-only by default)"]
+```
+
+### Task pipeline
+
+```mermaid
+flowchart TD
+  ready["READY"] --> run["RUNNING<br/>prepare worktree · build AgentRequest"]
+  run --> worker["Worker<br/>fresh DSH subagent"]
+  worker --> verify["VERIFYING<br/>scope / output / budget checks · independent commands"]
+  verify -->|"violation or failure"| repair["FIX_REQUIRED<br/>repair task or retry (budget-bound)"]
+  verify -->|"pass"| review{"Review required?"}
+  review -->|"yes"| rv["REVIEWING<br/>read-only reviewer"]
+  review -->|"no"| integ["INTEGRATING<br/>patch integration"]
+  rv -->|"blocking finding"| repair
+  rv -->|"pass"| integ
+  integ -->|"conflict"| repair
+  integ -->|"success"| done["DONE<br/>downstream tasks unlocked"]
+  repair --> ready
+```
+
+### Design rules
+
+- **The controller decides, workers do.** A worker only returns a result; the controller runs verification, review, integration, and acceptance itself.
+- **State is the source of truth.** `run.json` plus the event log survive a Host restart; a run whose worker lock has no live owner is recovered and re-queued.
+- **Evidence is snapshot-bound.** A passing command is evidence only for the code snapshot it ran against; integration invalidates older evidence, and completed tasks' commands are re-run in the final verification matrix.
+- **Failures become tasks.** Test failures, review findings, acceptance gaps, and scope violations create bounded repair tasks. Exhausted budgets block the run instead of looping forever.
+- **One approval gate, one finalization gate.** The user approves scope and acceptance once; no Git action happens until `delivery_finalize` receives `<run-id>:<mode>`.
+
+The concrete worker-launch mechanics are described in [How workers run](#how-workers-run).
 
 ## Requirements
 
@@ -78,7 +180,7 @@ The DSH bundle adds a view over the durable run state:
   - the raw event stream;
 - **Settings → 交付循环 / Delivery loop** lists every registered run across repositories.
 
-The view is read-only except for pause, resume, cancel, export report, and answering pending human decisions. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`.
+The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If the web carrier cannot inject the view token, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
 
 The view API is same-origin and guarded by a per-process token injected into the DSH page. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs.
 
@@ -110,9 +212,9 @@ After you approve the scope and acceptance summary, ask the agent to call `deliv
 | `delivery_inspect` | Full view payload: graph, requirements, decisions, files, artifacts |
 | `delivery_watch` | Wait for progress or a terminal state |
 | `delivery_respond` | Answer a pending human decision |
-| `delivery_pause` / `delivery_resume` / `delivery_cancel` | Lifecycle control |
+| `delivery_pause` / `delivery_resume` / `delivery_cancel` | Lifecycle control; resume can raise budget/time/attempt limits |
 | `delivery_export_report` | Write `reports/final.md` |
-| `delivery_finalize` | Explicitly confirmed post-completion Git action |
+| `delivery_finalize` | Explicitly confirmed post-completion Git action; confirmation is `<run-id>:<mode>` |
 
 ## How workers run
 
@@ -150,6 +252,7 @@ A completed live DSH-subagent delivery run is recorded in [the verification repo
 
 ## Documentation
 
+- [简体中文 README](readme-cn.md)
 - [Configuration](docs/configuration.md)
 - [Operations](docs/operations.md)
 - [Evaluation](docs/evaluation.md)
@@ -164,5 +267,5 @@ A completed live DSH-subagent delivery run is recorded in [the verification repo
 - The coordinator fallback used after a Host restart has not been exercised in a real restart drill.
 - The view's rendered layout, light/dark appearance, focus behavior, and narrow-width layout were not verified in a browser in this environment; refresh the page after install or upgrade.
 - Verification defaults to a fail-closed container backend requiring a preloaded digest-pinned image. This host has no container runtime; explicit trusted-host mode is available for trusted projects.
-- Artifact acceptance requires typed `artifact-check` evidence from a project provider.
+- Artifact acceptance is limited to the produced delivery artifact (`delivery.patch`); other artifact types need a project-specific provider.
 - The `merge` finalization mode requires a project-specific finalizer.

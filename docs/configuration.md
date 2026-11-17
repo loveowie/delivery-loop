@@ -74,21 +74,23 @@ The prepared graph must be acyclic. Each task declares:
 
 Dependencies unlock only after the upstream task is integrated and marked `DONE`.
 
+A requirement must be satisfiable: either it has at least one mandatory acceptance condition, or at least one covering task declares a verification command. The graph is rejected at `delivery_start` otherwise. Completed tasks' verification commands are included in the final verification matrix and re-run at the accepted snapshot. Mandatory `artifact` acceptance is checked against the produced `delivery.patch` digest; mandatory `review` acceptance requires `review.final_review: true`.
+
 ## Git modes
 
 - `prepare-only`: produce an integration worktree and `delivery.patch`; do not touch the main checkout or create commits.
-- `commit`: allow an explicit post-completion local commit.
+- `commit`: create a local commit and park it on `refs/delivery/<run-id>` so it cannot be pruned with a detached worktree.
 - `branch`: create a delivery branch and commit after explicit confirmation.
 - `push`: push the confirmed branch after explicit confirmation.
-- `merge`: reserved for a project-specific finalizer; the generic finalizer refuses this mode.
+- `merge`: reserved for a project-specific finalizer; the generic finalizer refuses this mode before writing any journal state.
 
-No finalization action runs merely because the run reaches `COMPLETED`.
+No finalization action runs merely because the run reaches `COMPLETED`. `delivery_finalize` requires `confirmation` to be exactly `<run-id>:<mode>`; a bare run id is rejected. Finalization commits disable repository hooks, signing and fsmonitor so worker-delivered content is never executed on the host.
 
 ## Verification execution policy
 
 New runs default to `verification.execution.backend: container`. Commands require an explicitly digest-pinned, locally available image; the runtime never pulls an image implicitly. The container has no network, capabilities or host home mount. A copy of source, excluding `.git` and `.delivery`, is mounted read-only at `/workspace`; temporary output belongs in `/tmp`. Toolchains and dependencies must already exist in the image. Commands that write into the source tree must be adjusted for an external output directory.
 
-For a trusted local project, explicitly opt in to host execution:
+For a trusted local project, explicitly opt in to host execution in the **prepared** configuration:
 
 ```yaml
 verification:
@@ -96,7 +98,9 @@ verification:
     backend: trusted-host
 ```
 
-Host mode filters environment variables and uses an empty temporary home; it is **not** OS isolation. Missing runtime/image causes error evidence and blocks the run; it never falls back to host execution.
+The repository-level `delivery.yaml` cannot select `trusted-host`; doing so is rejected. The `delivery_start` call must additionally pass `allow_trusted_host: true` after the user explicitly approves host execution. Host mode filters environment variables and uses an empty temporary home; it is **not** OS isolation. Missing runtime/image causes error evidence and blocks the run; it never falls back to host execution.
+
+`delivery_start.config_override` is limited to `runtime`, `review`, `git` and `workers`. Verification policy, capabilities, profile and spec provider must live in the prepared `delivery.yaml` so the approved document matches what runs.
 
 ## DSH bundle configuration
 

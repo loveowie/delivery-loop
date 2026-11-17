@@ -249,3 +249,31 @@ test('repair worktree stages the accepted seed and overlays the failed attempt u
     await repo.cleanup();
   }
 });
+
+test('managed worktree validation rejects a redirected or missing .git entry', async () => {
+  const fixture = await createGitFixture();
+  try {
+    const workdir = join(fixture.path, '.delivery', 'runs', 'run-1', 'worktrees', 'TASK-1-attempt-0');
+    await fixture.git(['worktree', 'add', '--detach', workdir, fixture.baseline]);
+    const { assertManagedWorktree } = await import('../../src/workspace/worktree-manager.js');
+    const { GuardedGitAdapter, createNodeGitExecutor } = await import('../../src/workspace/git-adapter.js');
+    const git = new GuardedGitAdapter(createNodeGitExecutor());
+
+    await assertManagedWorktree(workdir, fixture.path, fixture.baseline, git);
+
+    // Without the worktree .git entry, git discovery walks up into the real
+    // checkout; the controller must refuse to operate in that directory.
+    await fixture.git(['worktree', 'remove', '--force', workdir]).catch(async () => {
+      const { rm } = await import('node:fs/promises');
+      await rm(join(workdir, '.git'), { force: true });
+    });
+    const { rm } = await import('node:fs/promises');
+    await rm(join(workdir, '.git'), { force: true });
+    await assert.rejects(
+      assertManagedWorktree(workdir, fixture.path, fixture.baseline, git),
+      /\.git|unexpected git root|missing/i,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});

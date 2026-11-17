@@ -14,8 +14,11 @@ import type {
 } from '../finalize/finalizer.js';
 import { createCodeSnapshot } from '../workspace/repository-context.js';
 import { durationExceeded, progressSignature } from './loop-guards.js';
-import { hasActiveWorkerLock } from './worker-lock.js';
+import { acquireWorkerLock, hasActiveWorkerLock } from './worker-lock.js';
+import type { WorkerLock } from './worker-lock.js';
+import { recoverInterruptedRun } from '../controller/recovery.js';
 import { recordDecision } from '../controller/decision-journal.js';
+import { createHash } from 'node:crypto';
 
 export interface DeliveryRunManagerOptions {
   pluginRoot: string;
@@ -128,11 +131,29 @@ export async function drainRepositoryQueue(
   return promoted;
 }
 
+function isUsableRefSegment(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
+    && !value.includes('..')
+    && !value.endsWith('.')
+    && !value.endsWith('.lock');
+}
+
+function deliveryRefName(runId: string): string {
+  return isUsableRefSegment(runId)
+    ? runId
+    : `R-${createHash('sha256').update(runId).digest('hex').slice(0, 16)}`;
+}
+
+function deliveryBranchName(runId: string): string {
+  return `delivery/${deliveryRefName(runId)}`;
+}
+
 export class DeliveryRunManager implements DeliveryRunManagerPort {
   private readonly options: DeliveryRunManagerOptions;
   private readonly handles = new Map<string, RuntimeHandle>();
   private readonly loops = new Map<string, Promise<void>>();
   private readonly executionExits = new Map<string, Promise<void>>();
+  private readonly workerLocks = new Map<string, WorkerLock>();
   private readonly registry: RunRegistry;
 
   constructor(options: DeliveryRunManagerOptions) {
@@ -233,13 +254,117 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     if (await this.ownerActive(handle.state)) {
       return;
     }
+    if (['PLANNING', 'RUNNING', 'VERIFYING', 'WAITING_HUMAN'].includes(handle.state.status) && !handle.state.pause_requested) {
+      await this.recoverStaleRuns(handle.store);
+      handle.state = (await handle.store.readRun(handle.state.run_id)) ?? handle.state;
+    }
     if (runnableStatus(handle.state.status) && !handle.state.pause_requested) {
       handle.state = (await queueRunForAdmission(handle.store, handle.state.run_id)) ?? handle.state;
     }
     await this.drain(handle.store);
   }
 
+  private async releaseWorkerLock(runId: string): Promise<void> {
+    const lock = this.workerLocks.get(runId);
+    if (lock === undefined) return;
+    this.workerLocks.delete(runId);
+    await lock.release().catch(() => undefined);
+  }
+
+  /**
+   * Reset in-flight tasks and queue runs whose owning Host is gone. This is the
+   * difference between "durable state exists" and "a restarted Host can
+   * actually continue the run": without it a crash leaves tasks RUNNING
+   * forever and the run is eventually blocked by the no-progress guard.
+   */
+  private async recoverStaleRuns(store: StateStore): Promise<void> {
+    let runs: RunState[];
+    try {
+      runs = await store.listRuns();
+    } catch {
+      return;
+    }
+    for (const run of runs) {
+      if (!['PLANNING', 'RUNNING', 'VERIFYING', 'WAITING_HUMAN'].includes(run.status)) continue;
+      if (run.pause_requested) continue;
+      // A freshly promoted run may not have acquired its worker lock yet; do
+      // not steal it inside that admission window.
+      if (
+        run.status === 'PLANNING' &&
+        Number.isFinite(Date.parse(run.updated_at)) &&
+        Date.now() - Date.parse(run.updated_at) < 30_000
+      ) {
+        continue;
+      }
+      try {
+        if (await this.ownerActive(run)) continue;
+        await recoverInterruptedRun(store, run.run_id);
+        if (run.status === 'WAITING_HUMAN') {
+          // A crash while a sibling task was still running must not leave that
+          // task RUNNING forever. Keep the run waiting for its decisions.
+          await store.appendEvent(run.run_id, {
+            type: 'run_recovered',
+            previous_status: run.status,
+          });
+          await recordDecision(store, {
+            run_id: run.run_id,
+            phase: 'lifecycle',
+            code: 'run_recovered',
+            title: '恢复等待人工决策的运行',
+            detail: '进行中的任务已重新排队，待决策完成后继续。',
+            outcome: 'info',
+          });
+          continue;
+        }
+        await store.updateRun(run.run_id, (draft) => ({
+          ...draft,
+          status: 'QUEUED',
+        }));
+        await store.appendEvent(run.run_id, {
+          type: 'run_recovered',
+          previous_status: run.status,
+        });
+        await recordDecision(store, {
+          run_id: run.run_id,
+          phase: 'lifecycle',
+          code: 'run_recovered',
+          title: '恢复中断的交付运行',
+          detail: `原状态 ${run.status}，进行中的任务已重新排队。`,
+          outcome: 'info',
+        });
+      } catch (error) {
+        await store.appendEvent(run.run_id, {
+          type: 'run_recovery_error',
+          message: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+      }
+    }
+  }
+
+  async ensureActive(runId: string, repoRoot?: string): Promise<void> {
+    try {
+      const root = repoRoot ?? (await this.registry.lookup(runId));
+      if (root === undefined) return;
+      const store = await StateStore.open(root);
+      const state = await store.readRun(runId);
+      if (state === undefined) return;
+      if (!['QUEUED', 'PLANNING', 'RUNNING', 'VERIFYING'].includes(state.status)) return;
+      const handle = await this.get(runId, root);
+      await this.wake(handle);
+    } catch (error) {
+      const root = repoRoot ?? (await this.registry.lookup(runId).catch(() => undefined));
+      if (root !== undefined) {
+        const store = await StateStore.open(root).catch(() => undefined);
+        await store?.appendEvent(runId, {
+          type: 'wake_error',
+          message: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
+      }
+    }
+  }
+
   private async launchPromoted(state: RunState, store: StateStore): Promise<void> {
+    if (this.loops.has(state.run_id)) return;
     let handle = this.handles.get(state.run_id);
     if (handle !== undefined) {
       handle.state = state;
@@ -255,11 +380,27 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
       };
       this.handles.set(state.run_id, handle);
     }
-    handle.state = await handle.controller.start(state.run_id);
-    this.ensureLoop(handle);
+    if (!this.workerLocks.has(state.run_id)) {
+      const lock = await acquireWorkerLock(store.repoRoot, state.run_id);
+      if (!lock.acquired) {
+        // Another controller owns this run. Do not run it twice; leave it
+        // queued for a later admission once that owner releases the lock.
+        await store.updateRun(state.run_id, (draft) => ({ ...draft, status: 'QUEUED' }));
+        return;
+      }
+      this.workerLocks.set(state.run_id, lock);
+    }
+    try {
+      handle.state = await handle.controller.start(state.run_id);
+      this.ensureLoop(handle);
+    } catch (error) {
+      await this.releaseWorkerLock(state.run_id);
+      throw error;
+    }
   }
 
   private async drain(store: StateStore): Promise<void> {
+    await this.recoverStaleRuns(store);
     await drainRepositoryQueue(
       store,
       async (state) => await this.launchPromoted(state, store),
@@ -271,7 +412,10 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     if (this.loops.has(state.run_id)) {
       return true;
     }
-    return state.status !== 'QUEUED' && await hasActiveWorkerLock(state.repo_root, state.run_id);
+    // A live worker lock means some controller still owns this run, even when
+    // the run is currently WAITING_HUMAN (its tick may still be finishing
+    // sibling tasks). Never "recover" a run that another process is executing.
+    return await hasActiveWorkerLock(state.repo_root, state.run_id);
   }
 
   private ensureLoop(handle: RuntimeHandle): void {
@@ -283,6 +427,7 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     this.loops.set(runId, loop);
     const executionExit = loop.finally(async () => {
       this.loops.delete(runId);
+      await this.releaseWorkerLock(runId);
       handle.state = (await queueRunForAdmission(handle.store, runId)) ?? handle.state;
       await this.drain(handle.store).catch(async (error) => {
         await handle.store.appendEvent(runId, {
@@ -407,9 +552,10 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
         `integration snapshot changed before finalization: expected ${handle.state.integration_snapshot_id ?? 'none'}, got ${snapshot.id}`,
       );
     }
-    const branch = `delivery/${handle.state.run_id}`;
+    const branch = deliveryBranchName(handle.state.run_id);
     const branchRef = `refs/heads/${branch}`;
     const remoteRef = `refs/heads/${branch}`;
+    const deliveryRef = `refs/delivery/${deliveryRefName(handle.state.run_id)}`;
     const commitMessage = `delivery: complete ${handle.state.run_id}`;
     const readHead = async (): Promise<string> =>
       (await nodeGit(['rev-parse', 'HEAD'], cwd)).stdout.trim();
@@ -463,7 +609,7 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     if (action === 'branch' || action === 'push') {
       const existingBranch = await readBranchRef();
       if (existingBranch === null) {
-        await git.exec(['switch', '-c', branch], cwd, approval);
+        await git.exec(['-c', 'core.hooksPath=/dev/null', 'switch', '-c', branch], cwd, approval);
       } else {
         const branchIsRecoverable =
           existingBranch === startingHead || await ownedCommit(existingBranch);
@@ -471,7 +617,7 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
           throw new Error(`conflicting finalization branch exists: ${branch}`);
         }
         if ((await readCurrentBranch()) !== branch) {
-          await git.exec(['switch', branch], cwd, approval);
+          await git.exec(['-c', 'core.hooksPath=/dev/null', 'switch', branch], cwd, approval);
         }
       }
     }
@@ -485,9 +631,21 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
       await git.exec(['add', '-A'], cwd, approval);
       const status = await git.exec(['status', '--porcelain'], cwd);
       if (status.stdout.trim().length > 0) {
-        await git.exec(['commit', '-m', commitMessage], cwd, approval);
+        // Never execute hooks or signing programs from worker-controlled
+        // content on the host. A delivery commit must be a pure data operation.
+        await git.exec([
+          '-c', 'core.hooksPath=/dev/null',
+          '-c', 'core.fsmonitor=false',
+          '-c', 'commit.gpgsign=false',
+          'commit', '--no-verify', '-m', commitMessage,
+        ], cwd, approval);
       }
       head = await readHead();
+    }
+    if (action === 'commit') {
+      // A detached commit is unreachable and can be pruned once the
+      // integration worktree is removed. Park it on a durable ref.
+      await git.exec(['update-ref', deliveryRef, head], cwd, approval);
     }
 
     if (action === 'push') {
@@ -504,6 +662,7 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
         }
         await git.exec(
           [
+            '-c', 'core.hooksPath=/dev/null',
             'push',
             `--force-with-lease=${remoteRef}:${remoteBefore ?? ''}`,
             'origin',
@@ -514,6 +673,8 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
         );
       }
     }
-    return { head, branch: action === 'commit' ? null : branch };
+    return action === 'commit'
+      ? { head, branch: null, ref: deliveryRef }
+      : { head, branch, ref: branchRef };
   }
 }

@@ -12,11 +12,28 @@ import type { DshAgent } from '../workers/dsh-subagent-adapter.js';
 import { DeliveryViewService } from './view-service.js';
 import type { RunDetail, RunSummary } from './view-service.js';
 import type { StartRunInput } from '../runtime/types.js';
+import { recordDecision } from '../controller/decision-journal.js';
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_API_PREFIX = '/delivery-loop';
 const MAX_BODY_BYTES = 1_000_000;
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'BLOCKED', 'PAUSED', 'WAITING_HUMAN']);
+
+const SAFE_OVERRIDE_KEYS = new Set(['runtime', 'review', 'git', 'workers']);
+
+/** Reject override fields that can weaken the security or verification contract. */
+function assertSafeConfigOverride(value: unknown): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('config_override must be an object');
+  }
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    if (!SAFE_OVERRIDE_KEYS.has(key)) {
+      throw new Error(
+        `config_override cannot change "${key}"; put it in the approved prepared delivery.yaml instead`,
+      );
+    }
+  }
+}
 
 /** Services this plugin requires; optional services are reached through `ctx.get`. */
 export const inject = ['tools', 'agents', 'subagents'];
@@ -267,15 +284,21 @@ function registerWebApi(ctx: any, options: {
   }
   const { config, view, service, token } = options;
   const prefix = config.apiPrefix;
-  const enforceToken = typeof webServer.tapIndex === 'function';
-  if (enforceToken) {
-    ctx.effect(() => webServer.tapIndex((html: string) => html.replace(
-      '</head>',
-      `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
-    )), 'delivery-loop: view token');
+  if (typeof webServer.tapIndex !== 'function') {
+    // Never expose run control and file reads without the page token. On a
+    // carrier that cannot inject the token the view is unavailable, but the
+    // native tools keep working.
+    console.warn(
+      '[delivery-loop] webServer.tapIndex is unavailable; refusing to expose an unauthenticated view API.',
+    );
+    return;
   }
+  ctx.effect(() => webServer.tapIndex((html: string) => html.replace(
+    '</head>',
+    `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
+  )), 'delivery-loop: view token');
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (enforceToken && req.headers['x-delivery-loop-token'] !== token) {
+    if (req.headers['x-delivery-loop-token'] !== token) {
       json(res, 401, { error: 'unauthorized' });
       return;
     }
@@ -337,7 +360,14 @@ function registerWebApi(ctx: any, options: {
           ...(targetRepo === undefined ? {} : { repo_root: targetRepo }),
         };
         if (action === 'pause') json(res, 200, await service.delivery_pause(base));
-        else if (action === 'resume') json(res, 200, await service.delivery_resume(base));
+        else if (action === 'resume') {
+          json(res, 200, await service.delivery_resume({
+            ...base,
+            ...(typeof body.max_total_tokens === 'number' ? { max_total_tokens: body.max_total_tokens } : {}),
+            ...(typeof body.max_duration_hours === 'number' ? { max_duration_hours: body.max_duration_hours } : {}),
+            ...(typeof body.max_task_attempts === 'number' ? { max_task_attempts: body.max_task_attempts } : {}),
+          }));
+        }
         else if (action === 'cancel') json(res, 200, await service.delivery_cancel(base));
         else if (action === 'respond') {
           if (typeof body.decision_id !== 'string' || typeof body.response !== 'string') {
@@ -352,8 +382,9 @@ function registerWebApi(ctx: any, options: {
           if (targetRepo === undefined) throw new Error('repo_root is required to export a report');
           json(res, 200, await service.delivery_export_report({ run_id: targetRun, repo_root: targetRepo }));
         } else if (action === 'finalize') {
-          if (typeof body.mode !== 'string' || typeof body.confirmation !== 'string') {
-            throw new Error('mode and confirmation are required');
+          const modes = ['prepare-only', 'commit', 'branch', 'push', 'merge'];
+          if (typeof body.mode !== 'string' || !modes.includes(body.mode) || typeof body.confirmation !== 'string') {
+            throw new Error('mode must be one of: prepare-only, commit, branch, push, merge');
           }
           json(res, 200, await service.delivery_finalize({
             ...base,
@@ -482,7 +513,8 @@ export function apply(ctx: any, rawConfig: unknown): void {
         prepared_directory: { type: 'string', required: true, description: 'Directory containing spec.md, task-graph.json, and optional delivery.yaml.' },
         repo_root: { type: 'string', description: 'Target Git repository root. Omit it to use the Session working directory.' },
         run_id: { type: 'string', description: 'Optional stable run id. Defaults to a generated timestamped id.' },
-        config_override: { type: 'object', description: 'Optional deep partial DeliveryConfig merged over repository and defaults.' },
+        config_override: { type: 'object', description: 'Optional runtime/review/git/worker overrides. Verification policy must live in the approved delivery.yaml.' },
+        allow_trusted_host: { type: 'boolean', description: 'Set to true only after the user explicitly approves running verification commands on the host. Required for trusted-host verification.' },
       },
       async execute(args, exec) {
         const repoRoot = await resolveRepo(args.repo_root, exec);
@@ -490,15 +522,27 @@ export function apply(ctx: any, rawConfig: unknown): void {
           ? args.run_id
           : newRunId();
         if (exec.agent !== undefined) rememberParent(runId, exec.agent);
+        if (args.config_override !== undefined) assertSafeConfigOverride(args.config_override);
         const input: StartRunInput = {
           repo_root: repoRoot,
           prepared_directory: String(args.prepared_directory),
           run_id: runId,
+          ...(args.allow_trusted_host === true ? { allow_trusted_host: true } : {}),
           ...(args.config_override !== null && typeof args.config_override === 'object'
             ? { config_override: args.config_override as never }
             : {}),
         };
         const handle = await manager.start(input);
+        if (handle.state.config.verification.execution?.backend === 'trusted-host') {
+          await recordDecision(handle.store, {
+            run_id: handle.state.run_id,
+            phase: 'prepare',
+            code: 'trusted_host_verification_acknowledged',
+            title: '已确认在宿主机执行验证命令',
+            detail: '启动调用显式传入 allow_trusted_host=true；该模式没有容器隔离。',
+            outcome: 'info',
+          });
+        }
         return toolSummary(await view.getStatus(handle.state.run_id, handle.repoRoot));
       },
     }),
@@ -515,6 +559,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
           return { runs: (await view.listRuns(repoRoot)).map(toolSummary) };
         }
         const repoRoot = args.repo_root === undefined ? undefined : await resolveRepo(args.repo_root, exec);
+        await manager.ensureActive(String(args.run_id), repoRoot);
         const detail = await view.getRun(args.run_id, repoRoot, { includeFiles: false, includeArtifacts: false });
         return {
           ...toolSummary(detail),
@@ -543,6 +588,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
       },
       async execute(args, exec) {
         const repoRoot = args.repo_root === undefined ? undefined : await resolveRepo(args.repo_root, exec);
+        await manager.ensureActive(String(args.run_id), repoRoot);
         return inspectPayload(await view.getRun(String(args.run_id), repoRoot));
       },
     }),
@@ -558,6 +604,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
         const repoRoot = args.repo_root === undefined ? undefined : await resolveRepo(args.repo_root, exec);
         const timeout = Math.max(1, Math.min(typeof args.timeout_ms === 'number' ? args.timeout_ms : 30_000, 300_000));
         const deadline = Date.now() + timeout;
+        await manager.ensureActive(String(args.run_id), repoRoot);
         for (;;) {
           const status = await view.getStatus(String(args.run_id), repoRoot);
           if (TERMINAL_STATUSES.has(status.status) || Date.now() >= deadline) {
@@ -604,15 +651,24 @@ export function apply(ctx: any, rawConfig: unknown): void {
     }),
     defineTool({
       name: 'delivery_resume',
-      description: 'Resume a paused, queued, or blocked delivery run from its durable state.',
+      description: 'Resume a paused, queued, or blocked delivery run. A resumed run can also raise its token, duration, or per-task retry budget; pass only increases after explicit user confirmation.',
       parameters: {
         run_id: { type: 'string', required: true, description: 'Run id.' },
         repo_root: { type: 'string', description: 'Target repository root. Omit it to use the Session working directory.' },
+        max_total_tokens: { type: 'integer', description: 'Optional increased token budget for this run.' },
+        max_duration_hours: { type: 'number', description: 'Optional increased wall-clock budget in hours.' },
+        max_task_attempts: { type: 'integer', description: 'Optional increased per-task retry limit.' },
       },
       async execute(args, exec) {
         const runId = String(args.run_id);
         const repoRoot = args.repo_root === undefined ? undefined : await resolveRepo(args.repo_root, exec);
-        await service.delivery_resume({ run_id: runId, ...(repoRoot === undefined ? {} : { repo_root: repoRoot }) });
+        await service.delivery_resume({
+          run_id: runId,
+          ...(repoRoot === undefined ? {} : { repo_root: repoRoot }),
+          ...(typeof args.max_total_tokens === 'number' ? { max_total_tokens: args.max_total_tokens } : {}),
+          ...(typeof args.max_duration_hours === 'number' ? { max_duration_hours: args.max_duration_hours } : {}),
+          ...(typeof args.max_task_attempts === 'number' ? { max_task_attempts: args.max_task_attempts } : {}),
+        });
         return toolSummary(await view.getStatus(runId, repoRoot));
       },
     }),
@@ -651,7 +707,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
       parameters: {
         run_id: { type: 'string', required: true, description: 'Run id.' },
         mode: { type: 'string', required: true, enum: ['prepare-only', 'commit', 'branch', 'push', 'merge'], description: 'Finalization mode.' },
-        confirmation: { type: 'string', required: true, description: 'Explicit user confirmation for the exact run id and mode.' },
+        confirmation: { type: 'string', required: true, description: 'Explicit user confirmation for the exact run id and mode, formatted as <run-id>:<mode>.' },
         repo_root: { type: 'string', description: 'Target repository root. Omit it to resolve from the run registry.' },
       },
       async execute(args) {

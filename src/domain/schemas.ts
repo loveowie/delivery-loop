@@ -191,6 +191,7 @@ export const RunStateSchema = z.object({
   pending_decision_tasks: z.record(z.string(), z.array(z.string())).optional(),
   integration_snapshot_id: z.string().optional(), integration_worktree: z.string().optional(),
   final_verification_snapshot_id: z.string().optional(), baseline_verification_id: z.string().optional(),
+  baseline_failures: z.array(z.string()).optional(),
   total_tokens_used: z.number().int().nonnegative().optional(),
   usage_incomplete: z.boolean().optional(), last_error: z.string().optional(),
   decisions: z.array(z.object({decision_id:z.string(),response:z.string(),answered_at:z.string()})).optional(),
@@ -235,6 +236,7 @@ export const AgentRequestSchema = z.object({
     requirements: z.array(z.unknown()),
     acceptance: z.array(z.unknown()),
     decisions: z.array(z.object({ decision_id: z.string(), response: z.string(), answered_at: z.string() })),
+    baseline: z.object({ verification_id: z.string(), failed_commands: z.array(z.string()) }).optional(),
     failure: z.unknown().optional(),
   }).optional(),
 });
@@ -329,6 +331,33 @@ export function validateTaskGraph(graph: TaskGraph): ValidationResult<TaskGraph>
       if (candidate.acceptance !== undefined && !acceptanceIds.has(acceptanceId)) {
         errors.push(`task ${task.id} has unknown acceptance: ${acceptanceId}`);
       }
+    }
+  }
+
+  // A requirement must have a way to become satisfied at completion: either a
+  // mandatory acceptance condition, or at least one completed task covering it
+  // with a verification command that the final matrix can re-run.
+  const mandatoryAcceptanceRequirements = new Set(
+    (candidate.acceptance ?? [])
+      .filter((condition) => condition.mandatory)
+      .map((condition) => condition.requirement_id),
+  );
+  for (const requirement of candidate.requirements ?? []) {
+    const coveringTasks = candidate.tasks.filter((task) =>
+      task.requirement_ids.includes(requirement.id),
+    );
+    if (
+      !mandatoryAcceptanceRequirements.has(requirement.id) &&
+      coveringTasks.length === 0
+    ) {
+      errors.push(`requirement ${requirement.id} is not covered by any task or mandatory acceptance`);
+    } else if (
+      !mandatoryAcceptanceRequirements.has(requirement.id) &&
+      !coveringTasks.some((task) => task.verification_commands.length > 0)
+    ) {
+      errors.push(
+        `requirement ${requirement.id} has no mandatory acceptance and no covering task with a verification command`,
+      );
     }
   }
 

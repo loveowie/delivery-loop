@@ -142,8 +142,15 @@ export async function finalizeRun(
   execute: FinalizeExecute,
   verifySnapshot?: (state: RunState) => Promise<void>,
 ): Promise<FinalizeResult> {
-  if (input.confirmation !== runId) {
-    throw new Error('finalize confirmation must exactly match the run id');
+  const allowedModes: FinalizeMode[] = ['prepare-only', 'commit', 'branch', 'push', 'merge'];
+  if (!allowedModes.includes(input.mode)) {
+    throw new Error(`unknown finalization mode: ${String(input.mode)}`);
+  }
+  if (input.mode === 'merge') {
+    throw new Error('merge finalization requires a project-specific finalizer');
+  }
+  if (input.confirmation !== `${runId}:${input.mode}`) {
+    throw new Error('finalize confirmation must exactly match "<run id>:<mode>"');
   }
   const initialState = await store.readRun(runId);
   if (initialState === undefined) {

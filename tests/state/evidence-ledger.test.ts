@@ -17,8 +17,8 @@ const evidence: EvidenceRecord = {
   started_at: '2026-10-28T00:00:00Z',
   finished_at: '2026-10-28T00:00:01Z',
   exit_code: 0,
-  stdout_path: '/tmp/stdout.log',
-  stderr_path: '/tmp/stderr.log',
+  stdout_path: 'E-1.stdout.log',
+  stderr_path: 'E-1.stderr.log',
   result: 'passed',
 };
 

@@ -57,3 +57,17 @@ test('unsupported execution policies are rejected rather than silently ignored',
   await assert.rejects(loadConfig(repo,{review:{task_review_policy:'batch'}}),/batch/i);
   await assert.rejects(loadConfig(repo,{spec:{provider:'custom'}}),/custom/i);
 });
+
+test('repository config cannot opt into trusted-host verification by itself', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-config-'));
+  await writeFile(
+    join(repo, 'delivery.yaml'),
+    ['verification:', '  execution:', '    backend: trusted-host'].join('\n'),
+  );
+
+  await assert.rejects(loadConfig(repo), /cannot enable trusted-host/i);
+  const explicit = await loadConfig(repo, {
+    verification: { execution: { backend: 'trusted-host' } },
+  });
+  assert.equal(explicit.verification.execution?.backend, 'trusted-host');
+});

@@ -56,6 +56,15 @@ export class StateStore {
   }
 
   static async open(repoRoot: string): Promise<StateStore> {
+    return await StateStore.openInternal(repoRoot, true);
+  }
+
+  /** Read-only open: never creates `.delivery` or run directories. */
+  static async openRead(repoRoot: string): Promise<StateStore> {
+    return await StateStore.openInternal(repoRoot, false);
+  }
+
+  private static async openInternal(repoRoot: string, create: boolean): Promise<StateStore> {
     const store = new StateStore(repoRoot);
     const deliveryRoot = join(repoRoot, '.delivery');
     try {
@@ -65,13 +74,16 @@ export class StateStore {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (!create) return store;
         await mkdir(deliveryRoot, { recursive: true, mode: 0o700 });
       } else {
         throw error;
       }
     }
     await assertSafePath(deliveryRoot, join(deliveryRoot, 'runs'));
-    await mkdir(join(deliveryRoot, 'runs'), { recursive: true, mode: 0o700 });
+    if (create) {
+      await mkdir(join(deliveryRoot, 'runs'), { recursive: true, mode: 0o700 });
+    }
     return store;
   }
 
@@ -118,7 +130,13 @@ export class StateStore {
   async listRuns(): Promise<RunState[]> {
     const { readdir } = await import('node:fs/promises');
     const root = join(this.repoRoot, '.delivery', 'runs');
-    const entries = await readdir(root, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
     const states: RunState[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -192,18 +210,40 @@ export class StateStore {
   }
 
   async readEvents(runId: string, limit = 50): Promise<Array<Record<string, unknown>>> {
+    const target = join(this.getRunDirectory(runId), 'events.jsonl');
     try {
-      const content = await readFile(join(this.getRunDirectory(runId), 'events.jsonl'), 'utf8');
-      return content
-        .split('\n')
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .slice(-Math.max(0, limit));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return [];
+      await assertSafePath(join(this.repoRoot, '.delivery'), target);
+      const details = await lstat(target);
+      if (!details.isFile()) throw new Error('events.jsonl is not a regular file');
+      const maxBytes = 8 * 1024 * 1024;
+      const length = Math.min(details.size, maxBytes);
+      const handle = await open(target, 'r');
+      let content: string;
+      try {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, Math.max(0, details.size - length));
+        content = buffer.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        await handle.close();
       }
-      throw error;
+      const lines = content.split('\n').filter((line) => line.trim().length > 0);
+      const events: Array<Record<string, unknown>> = [];
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as unknown;
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            events.push(parsed as Record<string, unknown>);
+          }
+        } catch {
+          // A torn final line (crash during append) must not break status.
+        }
+      }
+      return events.slice(-Math.max(0, limit));
+    } catch (error) {
+      // Missing, unreadable, symlinked or oversized event logs are treated as
+      // empty by the view; control-plane state remains authoritative.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      return [];
     }
   }
 

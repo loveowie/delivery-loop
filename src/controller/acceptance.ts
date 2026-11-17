@@ -15,12 +15,25 @@ export function evaluateAcceptance(
   if (requirements.length === 0 && !acceptance.some(condition => condition.mandatory)) {
     return { status: 'FAILED', reasons: ['delivery contract has no requirement or mandatory acceptance'] };
   }
-  const hasRequirementEvidence = (requirementId: string): boolean => graph.tasks.some(task =>
-    task.requirement_ids.includes(requirementId) && evidence.some(record =>
-      record.task_id === task.id && record.result === 'passed' &&
-      (currentSnapshotId === undefined || record.code_snapshot_id === currentSnapshotId),
-    ),
-  );
+  const evidenceIsCurrent = (record: EvidenceRecord): boolean =>
+    record.result === 'passed' &&
+    (currentSnapshotId === undefined || record.code_snapshot_id === currentSnapshotId);
+
+  /**
+   * A requirement is evidenced when every check of at least one completed task
+   * covering it has passed at the current snapshot. Matching by command (not by
+   * task id) lets the final verification matrix re-establish requirement
+   * coverage after later integrations; the previous per-task-id match made any
+   * non-final task's evidence permanently stale.
+   */
+  const hasRequirementEvidence = (requirementId: string): boolean =>
+    graph.tasks.some((task) => {
+      if (!task.requirement_ids.includes(requirementId) || task.status !== 'DONE') return false;
+      if (task.verification_commands.length === 0) return false;
+      return task.verification_commands.every((command) =>
+        evidence.some((record) => record.command === command && evidenceIsCurrent(record)),
+      );
+    });
   if (acceptance.length === 0) {
     const unsatisfied = requirements.filter(requirement => !hasRequirementEvidence(requirement.id));
     return unsatisfied.length === 0 ? { status: 'PASSED', reasons: [] } : {

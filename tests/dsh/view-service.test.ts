@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { access, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -136,4 +137,46 @@ test('view service exposes progress, decisions, files and artifact previews', as
   const emptyRepo = await gitRepo();
   assert.deepEqual(await view.listRuns(emptyRepo), []);
   assert.equal(existsSync(join(emptyRepo, '.delivery')), false);
+});
+
+test('view service rejects state-controlled roots, git path escapes, and option injection', async () => {
+  const repo = await gitRepo();
+  const registry = new RunRegistry(join(repo, '.registry'));
+  const store = await StateStore.open(repo);
+  await store.createRun(stateFor(repo, 'R-SAFE'));
+  await store.writeArtifact('R-SAFE', 'spec.md', '# Safe spec\n');
+  const view = new DeliveryViewService(registry);
+
+  await assert.rejects(
+    view.readFile('R-SAFE', './.git/config', 'repo', repo),
+    /git directory/i,
+  );
+
+  const injection = join(await mkdtemp(join(tmpdir(), 'delivery-loop-inject-')), 'victim');
+  await store.updateRun('R-SAFE', (draft) => ({
+    ...draft,
+    baseline_commit: `--output=${injection}`,
+  }));
+  await view.getRun('R-SAFE', repo);
+  await assert.rejects(access(injection));
+
+  await store.updateRun('R-SAFE', (draft) => ({ ...draft, repo_root: '/' }));
+  await assert.rejects(view.getRun('R-SAFE', repo), /repo_root does not match/i);
+});
+
+test('view service does not follow a symlinked spec or event log', async () => {
+  const repo = await gitRepo();
+  const registry = new RunRegistry(join(repo, '.registry'));
+  const store = await StateStore.open(repo);
+  await store.createRun(stateFor(repo, 'R-SYMLINK'));
+  await store.writeArtifact('R-SYMLINK', 'spec.md', '# Original\n');
+  const runDirectory = store.getRunDirectory('R-SYMLINK');
+  await rm(join(runDirectory, 'spec.md'));
+  await symlink('/etc/passwd', join(runDirectory, 'spec.md'));
+  await symlink('/etc/passwd', join(runDirectory, 'events.jsonl'));
+
+  const detail = await new DeliveryViewService(registry).getRun('R-SYMLINK', repo);
+
+  assert.equal(detail.spec_excerpt.includes('root:'), false);
+  assert.deepEqual(detail.events, []);
 });

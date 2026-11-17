@@ -5,6 +5,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import { parse as parseYaml } from 'yaml';
 import { loadConfig, mergeDeep } from '../config/config.js';
 import { TaskGraphSchema, validateTaskGraph } from '../domain/schemas.js';
+import { validateDeliveryContract } from '../domain/contract.js';
 import type { DeepPartial, DeliveryConfig, RunState, TaskGraph } from '../domain/types.js';
 import { StateStore } from '../state/state-store.js';
 import {
@@ -26,6 +27,8 @@ export interface CreatePreparedRunInput {
   prepared_directory: string;
   run_id?: string | undefined;
   config_override?: DeepPartial<DeliveryConfig> | undefined;
+  /** Explicit user confirmation for host-shell verification. */
+  allow_trusted_host?: boolean | undefined;
 }
 
 export interface PreparedRunFactoryOptions {
@@ -62,8 +65,21 @@ export class PreparedRunFactory {
       inspection.canonical_root,
       mergeDeep(preparedConfig, input.config_override),
     );
+    if (
+      config.verification.execution?.backend === 'trusted-host' &&
+      input.allow_trusted_host !== true
+    ) {
+      throw new Error(
+        'trusted-host verification requires explicit user confirmation; pass allow_trusted_host=true only after the user approves running verification commands on the host',
+      );
+    }
     const runId = input.run_id ?? generatedRunId();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId) ||
+      runId.includes('..') ||
+      runId.endsWith('.') ||
+      runId.endsWith('.lock')
+    ) {
       throw new Error(`invalid run id: ${runId}`);
     }
 
@@ -75,6 +91,10 @@ export class PreparedRunFactory {
     const graphValidation = validateTaskGraph(graph);
     if (!graphValidation.ok) {
       throw new Error(`invalid task graph: ${graphValidation.errors.join('; ')}`);
+    }
+    const contractErrors = validateDeliveryContract(graph, config);
+    if (contractErrors.length > 0) {
+      throw new Error(`invalid delivery contract: ${contractErrors.join('; ')}`);
     }
 
     for (const task of graph.tasks) {

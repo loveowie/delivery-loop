@@ -17,6 +17,7 @@ import type { PatchArtifact } from './patch-integrator.js';
 export interface IntegrationWorktreeProvider {
   ensureIntegration(state: RunState): Promise<string>;
   prepare(state: RunState, task: TaskNode, seedFromWorktree?: string): Promise<TaskWorkspace>;
+  validateWorkspace?(path: string, state: RunState): Promise<void>;
 }
 
 export interface PatchExporter {
@@ -38,6 +39,7 @@ export interface PatchExporter {
     integrationWorktree: string,
     patchPath: string,
     approval: { run_id: string },
+    options?: { threeWay?: boolean },
   ): Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -76,10 +78,12 @@ export class PatchIntegrationAdapter implements Integrator {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     // Each unfinished try gets a fresh directory; a crash cannot cause a second apply to dirty content.
+    await this.options.worktrees.validateWorkspace?.(workdir, state);
     const candidateTask: TaskNode = { ...task, id: `CANDIDATE-${candidateKey}-${randomUUID().slice(0, 8)}`, attempt: 0 };
     delete candidateTask.seed_worktree;
     const candidate = await this.options.worktrees.prepare(state, candidateTask, state.integration_worktree);
     const integrationWorktree = candidate.path;
+    await this.options.worktrees.validateWorkspace?.(integrationWorktree, state);
     const patch = await this.options.patchIntegrator.exportDeltaPatch(
       workdir,
       artifactDirectory,
@@ -91,6 +95,7 @@ export class PatchIntegrationAdapter implements Integrator {
       integrationWorktree,
       patch.path,
       { run_id: state.run_id },
+      { threeWay: true },
     );
     if (!applied.ok) {
       return { ok: false, ...(applied.error === undefined ? {} : { error: applied.error }) };

@@ -24,10 +24,10 @@ A blocked worker or a manual acceptance condition produces a pending decision. R
 ## Control
 
 - `delivery_pause` stops scheduling after the current step.
-- `delivery_resume` resumes a paused, queued or blocked run.
+- `delivery_resume` resumes a paused, queued or blocked run. It resets blocked tasks within the attempt budget and can raise `max_total_tokens`, `max_duration_hours` or `max_task_attempts`; budget-only decreases are rejected.
 - `delivery_cancel` aborts running workers and marks unfinished tasks `CANCELLED`; it cannot be undone.
 - `delivery_export_report` writes `reports/final.md` into the run directory.
-- `delivery_finalize` applies only the explicitly confirmed Git mode; the default is `prepare-only`.
+- `delivery_finalize` applies only the explicitly confirmed Git mode; the default is `prepare-only`. `confirmation` must be exactly `<run-id>:<mode>`.
 
 ## State layout
 
@@ -54,7 +54,9 @@ Each task worker is a fresh DSH child Agent. The initiating Agent is remembered 
 
 ## Recovery
 
-A restarted Host can reload a run from `run.json`, recreate the runtime and continue from `QUEUED`/`RUNNING`/`BLOCKED` as appropriate. Paused runs remain paused. A missing managed worktree or frozen seed index is rejected rather than silently recreated.
+A restarted Host reloads a run from `run.json` on the next `delivery_status`, `delivery_watch`, `delivery_inspect`, `delivery_resume` or `delivery_respond` call. A run with no live worker-lock owner is recovered: `RUNNING`/`VERIFYING`/`REVIEWING`/`INTEGRATING` tasks are reset to `READY`, the run is queued, and a new loop owns it. Paused runs remain paused. A missing managed worktree, changed HEAD, deleted `.git` entry or missing frozen seed index is rejected rather than silently recreated.
+
+Each executing run holds a per-run worker lock. A second Host or plugin activation cannot start a duplicate loop for the same run; the run stays queued until the owner releases it. Stale `RUNNING` runs without an owner are recovered instead of permanently consuming a repository write slot.
 
 ## Troubleshooting
 

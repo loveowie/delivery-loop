@@ -55,7 +55,7 @@ Timeout and cancellation abort the child signal. The child's result is captured 
 
 ## State and recovery
 
-`run.json` is the authoritative state; `events.jsonl` carries lifecycle and decision events. `~/.delivery-loop/runs.json` maps runs to repositories. The controller loop runs in the Host, so a run resumes after a Host restart from durable state. Worker sessions are disposable; their results are already committed to run state.
+`run.json` is the authoritative state; `events.jsonl` carries lifecycle and decision events. `~/.delivery-loop/runs.json` maps runs to repositories. The controller loop runs in the Host. On the next tool call after a restart, a run whose worker lock has no live owner is recovered: in-flight tasks are reset to `READY`, the run is queued, and a loop re-owns it. Each executing run holds a per-run worker lock so two Hosts cannot run the same run concurrently. Worker sessions are disposable; their results are already committed to run state.
 
 ## Decisions
 
@@ -73,9 +73,9 @@ The client uses only DSH theme tokens and locale dictionaries. It fetches the vi
 ## Security boundaries
 
 - Workers inherit the initiating session's sandbox and approval policy.
-- Reviewer and acceptance workers are instructed to stay read-only; the controller rejects a changed candidate snapshot.
-- The view API validates relative paths, rejects symlink escapes, caps file/response sizes, and is token-gated.
-- Finalization is explicit and defaults to `prepare-only`.
+- Reviewer and acceptance workers are instructed to stay read-only; the controller rejects a changed candidate snapshot and revalidates managed worktrees before every snapshot/patch operation.
+- The view API validates relative paths, rejects state-controlled roots and symlink escapes, caps file reads, and fails closed when the token cannot be injected.
+- Finalization is explicit, defaults to `prepare-only`, binds confirmation to `<run-id>:<mode>`, and disables repository hooks for its commits.
 
 ## Known extensions
 

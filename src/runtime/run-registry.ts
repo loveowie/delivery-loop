@@ -52,6 +52,12 @@ export class RunRegistry {
     });
     try {
       const data = await this.read();
+      const existing = data.runs[runId];
+      if (existing !== undefined && existing.repo_root !== repoRoot) {
+        throw new Error(
+          `run id ${runId} is already registered to another repository: ${existing.repo_root}`,
+        );
+      }
       data.runs[runId] = { repo_root: repoRoot, registered_at: new Date().toISOString() };
       await this.write(data);
     } finally {

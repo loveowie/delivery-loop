@@ -107,3 +107,55 @@ test('rejects duplicate acceptance ids', () => {
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /duplicate acceptance/i);
 });
+
+test('rejects a requirement without a mandatory acceptance or a covering verification command', () => {
+  const graph: TaskGraph = {
+    run_id: 'run-1',
+    requirements: [{ id: 'REQ-1', description: 'docs', status: 'PENDING' }],
+    acceptance: [],
+    tasks: [task('A')],
+  };
+  graph.tasks[0]!.requirement_ids = ['REQ-1'];
+  graph.tasks[0]!.acceptance_ids = [];
+  graph.tasks[0]!.verification_commands = [];
+
+  const result = validateTaskGraph(graph);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join('\n'), /REQ-1.*mandatory acceptance.*verification command/i);
+});
+
+test('accepts a requirement covered by a mandatory acceptance even without task commands', () => {
+  const graph: TaskGraph = {
+    run_id: 'run-1',
+    requirements: [{ id: 'REQ-1', description: 'manual review', status: 'PENDING' }],
+    acceptance: [{
+      id: 'AC-1',
+      requirement_id: 'REQ-1',
+      description: 'human approves',
+      verification: { type: 'manual' },
+      mandatory: true,
+      risk: 'low',
+    }],
+    tasks: [task('A')],
+  };
+  graph.tasks[0]!.requirement_ids = ['REQ-1'];
+  graph.tasks[0]!.acceptance_ids = [];
+  graph.tasks[0]!.verification_commands = [];
+
+  assert.equal(validateTaskGraph(graph).ok, true);
+});
+
+test('accepts a requirement covered by a task verification command', () => {
+  const graph: TaskGraph = {
+    run_id: 'run-1',
+    requirements: [{ id: 'REQ-1', description: 'tests', status: 'PENDING' }],
+    acceptance: [],
+    tasks: [task('A')],
+  };
+  graph.tasks[0]!.requirement_ids = ['REQ-1'];
+  graph.tasks[0]!.acceptance_ids = [];
+  graph.tasks[0]!.verification_commands = ['npm test'];
+
+  assert.equal(validateTaskGraph(graph).ok, true);
+});

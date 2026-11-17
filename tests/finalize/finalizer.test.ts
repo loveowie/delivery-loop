@@ -35,7 +35,7 @@ test('prepare-only completion never invokes commit or push', async () => {
 
   const result = await finalizeRun(store, 'run-1', {
     mode: 'prepare-only',
-    confirmation: 'run-1',
+    confirmation: 'run-1:prepare-only',
   }, async (action) => {
     calls.push(action);
   });
@@ -62,7 +62,7 @@ test('non-prepare finalization rejects a changed integration snapshot', async ()
     finalizeRun(
       store,
       'run-1',
-      { mode: 'commit', confirmation: 'run-1' },
+      { mode: 'commit', confirmation: 'run-1:commit' },
       async () => {},
       async () => {
         throw new Error('snapshot mismatch');
@@ -80,7 +80,7 @@ test('completed finalization is idempotent and does not execute twice', async ()
   const first = await finalizeRun(
     store,
     'run-1',
-    { mode: 'commit', confirmation: 'run-1' },
+    { mode: 'commit', confirmation: 'run-1:commit' },
     async () => {
       executions += 1;
       return { head: 'abc123' };
@@ -89,7 +89,7 @@ test('completed finalization is idempotent and does not execute twice', async ()
   const second = await finalizeRun(
     store,
     'run-1',
-    { mode: 'commit', confirmation: 'run-1' },
+    { mode: 'commit', confirmation: 'run-1:commit' },
     async () => {
       executions += 1;
       return { head: 'unexpected' };
@@ -113,8 +113,8 @@ test('concurrent finalization requests serialize and execute once', async () => 
     return { head: 'abc123' };
   };
 
-  const first = finalizeRun(store, 'run-1', { mode: 'commit', confirmation: 'run-1' }, execute);
-  const second = finalizeRun(store, 'run-1', { mode: 'commit', confirmation: 'run-1' }, execute);
+  const first = finalizeRun(store, 'run-1', { mode: 'commit', confirmation: 'run-1:commit' }, execute);
+  const second = finalizeRun(store, 'run-1', { mode: 'commit', confirmation: 'run-1:commit' }, execute);
   await new Promise((resolve) => setTimeout(resolve, 20));
   release();
   await Promise.all([first, second]);
@@ -131,7 +131,7 @@ test('unfinished intent is retried in reconciliation mode', async () => {
     finalizeRun(
       store,
       'run-1',
-      { mode: 'commit', confirmation: 'run-1' },
+      { mode: 'commit', confirmation: 'run-1:commit' },
       async (_action, _state, context) => {
         await context.recordIntentMetadata({ starting_head: 'abc123' });
         throw new Error('simulated crash after intent');
@@ -142,7 +142,7 @@ test('unfinished intent is retried in reconciliation mode', async () => {
   await finalizeRun(
     store,
     'run-1',
-    { mode: 'commit', confirmation: 'run-1' },
+    { mode: 'commit', confirmation: 'run-1:commit' },
     async (_action, _state, context) => {
       reconcile = context.reconcile;
       assert.equal(context.journal.metadata?.starting_head, 'abc123');
@@ -160,14 +160,14 @@ test('conflicting action is rejected after a finalization intent exists', async 
     finalizeRun(
       store,
       'run-1',
-      { mode: 'commit', confirmation: 'run-1' },
+      { mode: 'commit', confirmation: 'run-1:commit' },
       async () => { throw new Error('leave intent'); },
     ),
     /leave intent/,
   );
 
   await assert.rejects(
-    finalizeRun(store, 'run-1', { mode: 'branch', confirmation: 'run-1' }, async () => {}),
+    finalizeRun(store, 'run-1', { mode: 'branch', confirmation: 'run-1:branch' }, async () => {}),
     /already targets commit/i,
   );
 });
@@ -189,11 +189,27 @@ test('non-prepare finalization validates the completion certificate digest', asy
     finalizeRun(
       store,
       'run-1',
-      { mode: 'commit', confirmation: 'run-1' },
+      { mode: 'commit', confirmation: 'run-1:commit' },
       async () => { executed = true; },
     ),
     /completion certificate digest mismatch/i,
   );
 
   assert.equal(executed, false);
+});
+
+test('a rejected merge does not poison the finalization journal for later modes', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-finalize-'));
+  const { store } = await completedState(repo);
+  await assert.rejects(
+    finalizeRun(store, 'run-1', { mode: 'merge', confirmation: 'run-1:merge' }, async () => {}),
+    /merge finalization/i,
+  );
+  const result = await finalizeRun(
+    store,
+    'run-1',
+    { mode: 'prepare-only', confirmation: 'run-1:prepare-only' },
+    async () => {},
+  );
+  assert.equal(result.status, 'prepare-only');
 });

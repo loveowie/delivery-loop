@@ -11,13 +11,20 @@ export async function hasActiveWorkerLock(repoRoot: string, runId: string): Prom
   const directory = join(repoRoot, '.delivery', 'runs', runId);
   const path = join(directory, 'worker.lock');
   try {
-    return await lockfile.check(directory, {
+    // Key the lock by its own path, not by the run directory. proper-lockfile
+    // keeps a process-global map keyed by the `file` argument, so using the run
+    // directory here collides with StateStore's state lock on the same
+    // directory and silently overwrites ownership.
+    return await lockfile.check(path, {
       realpath: false,
       lockfilePath: path,
       stale: 30_000,
     });
-  } catch {
-    return false;
+  } catch (error) {
+    // A missing run directory means no owner. Any other failure means we
+    // cannot prove there is no owner, so fail closed rather than admitting a
+    // second controller for the same run.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }
 
@@ -29,7 +36,7 @@ export async function acquireWorkerLock(repoRoot: string, runId: string): Promis
   await mkdir(directory, { recursive: true });
   const path = join(directory, 'worker.lock');
   try {
-    const release = await lockfile.lock(directory, {
+    const release = await lockfile.lock(path, {
       realpath: false,
       lockfilePath: path,
       stale: 30_000,

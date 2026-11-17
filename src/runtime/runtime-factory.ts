@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { SkillResolver, verifyResolvedSkills } from '../capabilities/skill-resolver.js';
 import type { ResolvedSkill } from '../capabilities/skill-resolver.js';
 import { DeliveryController } from '../controller/delivery-controller.js';
@@ -15,7 +15,7 @@ import { PatchIntegrationAdapter } from '../workspace/patch-integration-adapter.
 import { PatchIntegrator } from '../workspace/patch-integrator.js';
 import { createCodeSnapshot } from '../workspace/repository-context.js';
 import type { GitInspector } from '../workspace/repository-context.js';
-import { WorktreeManager } from '../workspace/worktree-manager.js';
+import { WorktreeManager, assertManagedWorktree } from '../workspace/worktree-manager.js';
 import { NodeCommandProbe, runPreflight } from './preflight.js';
 import type { CommandProbe } from './preflight.js';
 
@@ -114,7 +114,13 @@ export class RuntimeFactory {
       },
     };
     const snapshots = {
-      async create(workdir: string, _baselineCommit: string) {
+      async create(workdir: string, baselineCommit: string) {
+        // Controller snapshots are only taken in managed worktrees. Revalidate
+        // on every snapshot so a worker cannot redirect the controller's git
+        // commands into the real checkout by touching the worktree .git file.
+        if (resolve(workdir) !== resolve(repoRoot)) {
+          await assertManagedWorktree(workdir, repoRoot, baselineCommit, git);
+        }
         return await createCodeSnapshot(workdir, inspector);
       },
       async changedFiles(workdir: string) {

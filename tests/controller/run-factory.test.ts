@@ -19,7 +19,7 @@ test('prepared run factory imports an approved graph and records the repository 
     JSON.stringify({
       run_id: 'draft',
       requirements: [{ id: 'REQ-1', description: 'works', status: 'PENDING' }],
-      acceptance: [],
+      acceptance: [{ id: 'AC-1', requirement_id: 'REQ-1', description: 'human check', verification: { type: 'manual' }, mandatory: true, risk: 'low' }],
       tasks: [],
     }),
   );
@@ -48,7 +48,43 @@ test('prepared run factory imports an approved graph and records the repository 
 test('prepared graph cannot import claimed completion or satisfied requirements', async () => {
   const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-untrusted-plan-'));
   const prepared=join(repo,'prepared');await mkdir(prepared);await writeFile(join(prepared,'spec.md'),'# Spec');
-  await writeFile(join(prepared,'task-graph.json'),JSON.stringify({run_id:'draft',tasks:[],requirements:[{id:'R',description:'unverified',status:'SATISFIED'}]}));
+  await writeFile(join(prepared,'task-graph.json'),JSON.stringify({run_id:'draft',tasks:[],requirements:[{id:'R',description:'unverified',status:'SATISFIED'}],acceptance:[{id:'A',requirement_id:'R',description:'check',verification:{type:'manual'},mandatory:true,risk:'low'}]}));
   const factory=new PreparedRunFactory({async inspect(){return {canonical_root:repo,baseline_commit:'base'};}});
   await assert.rejects(factory.create({repo_root:repo,prepared_directory:prepared,run_id:'run'}),/initial|PENDING|completion/i);
+});
+
+test('prepared trusted-host verification requires explicit start acknowledgement', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-trusted-'));
+  await mkdir(join(repo, 'prepared'), { recursive: true });
+  await writeFile(join(repo, 'prepared', 'spec.md'), '# Spec\n');
+  await writeFile(
+    join(repo, 'prepared', 'delivery.yaml'),
+    ['verification:', '  execution:', '    backend: trusted-host'].join('\n'),
+  );
+  await writeFile(
+    join(repo, 'prepared', 'task-graph.json'),
+    JSON.stringify({
+      run_id: 'draft',
+      requirements: [{ id: 'R', description: 'r', status: 'PENDING' }],
+      acceptance: [{ id: 'A', requirement_id: 'R', description: 'check', verification: { type: 'manual' }, mandatory: true, risk: 'low' }],
+      tasks: [],
+    }),
+  );
+  const factory = new PreparedRunFactory({
+    async inspect() {
+      return { canonical_root: repo, baseline_commit: 'abc123' };
+    },
+  });
+
+  await assert.rejects(
+    factory.create({ repo_root: repo, prepared_directory: join(repo, 'prepared'), run_id: 'run-1' }),
+    /allow_trusted_host/i,
+  );
+  const state = await factory.create({
+    repo_root: repo,
+    prepared_directory: join(repo, 'prepared'),
+    run_id: 'run-1',
+    allow_trusted_host: true,
+  });
+  assert.equal(state.config.verification.execution?.backend, 'trusted-host');
 });

@@ -113,6 +113,22 @@ export async function loadConfig(
   const merged = mergeDeep(mergeDeep(DEFAULT_CONFIG, repositoryConfig), override);
   const validated = DeliveryConfigSchema.parse(merged);
 
+  // A repository must not be able to opt itself (and its arbitrary commands)
+  // out of the container backend. Host execution is only accepted when the
+  // prepared/override configuration explicitly selects it, and the start call
+  // additionally requires an explicit acknowledgement.
+  const repositoryBackend = repositoryConfig.verification?.execution?.backend;
+  const overrideBackend = override?.verification?.execution?.backend;
+  if (
+    repositoryBackend === 'trusted-host' &&
+    overrideBackend === undefined &&
+    validated.verification.execution?.backend === 'trusted-host'
+  ) {
+    throw new Error(
+      'repository delivery.yaml cannot enable trusted-host verification; select it in the prepared delivery.yaml after explicit user confirmation',
+    );
+  }
+
   if (!validated.git.worktree_isolation) throw new Error('git.worktree_isolation=false is unsupported');
   if (validated.review.task_review_policy === 'batch') throw new Error('batch review policy is not implemented');
   if (validated.spec.provider === 'custom') throw new Error('custom spec provider is not implemented');

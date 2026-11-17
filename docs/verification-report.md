@@ -7,7 +7,7 @@ Environment: macOS, DeepSeek Harness Desktop 0.2.2-rc.3, Node 24.
 
 | Check | Result |
 | --- | --- |
-| `npm test` | 174/174 passed (final count is rechecked by `npm run verify:release`) |
+| `npm test` | 199/199 passed (final count is rechecked by `npm run verify:release`) |
 | `npm run typecheck` | passed |
 | `npm run build` | passed |
 | `npm run verify:skills` | 10 vendored Skills verified |

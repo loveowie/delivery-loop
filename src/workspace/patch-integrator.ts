@@ -1,4 +1,4 @@
-import { access, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { GitApproval, GitCommandResult, GitExecutionOptions } from './git-adapter.js';
@@ -60,6 +60,25 @@ export class PatchIntegrator {
     }
   }
 
+  /**
+   * Paths safe to mark intent-to-add: they must exist as regular worktree
+   * entries. `git add -N` on a path that only exists in the index would drop
+   * that index entry and silently erase a pending deletion.
+   */
+  private async existingPaths(worktree: string, files: string[]): Promise<string[]> {
+    const results = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const details = await lstat(join(worktree, file));
+          return details.isFile() || details.isSymbolicLink() ? file : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    return results.filter((file): file is string => file !== undefined);
+  }
+
   private async addIntentToAdd(
     worktree: string,
     files: string[],
@@ -70,7 +89,7 @@ export class PatchIntegrator {
       return;
     }
     await this.executor.exec(['add', '-N', '--', ...files], worktree, approval, {
-      env: { GIT_INDEX_FILE: indexPath },
+      env: { GIT_INDEX_FILE: indexPath, GIT_LITERAL_PATHSPECS: '1' },
     });
   }
 
@@ -119,18 +138,17 @@ export class PatchIntegrator {
       },
       async (indexPath) => {
         const addedFiles = await this.filesAddedSinceBase(worktree, approval, indexPath);
-        await this.addIntentToAdd(
+        const intentToAdd = await this.existingPaths(
           worktree,
           [...new Set([...files, ...addedFiles])],
-          approval,
-          indexPath,
         );
+        await this.addIntentToAdd(worktree, intentToAdd, approval, indexPath);
         return (
           await this.executor.exec(
             ['diff', '--binary', '--no-ext-diff', baselineCommit],
             worktree,
             approval,
-            { env: { GIT_INDEX_FILE: indexPath } },
+            { env: { GIT_INDEX_FILE: indexPath, GIT_LITERAL_PATHSPECS: '1' } },
           )
         ).stdout;
       },
@@ -169,18 +187,17 @@ export class PatchIntegrator {
       },
       async (indexPath) => {
         const addedFiles = await this.filesAddedSinceBase(worktree, approval, indexPath);
-        await this.addIntentToAdd(
+        const intentToAdd = await this.existingPaths(
           worktree,
           [...new Set([...files, ...addedFiles])],
-          approval,
-          indexPath,
         );
+        await this.addIntentToAdd(worktree, intentToAdd, approval, indexPath);
         return (
           await this.executor.exec(
             ['diff', '--binary', '--no-ext-diff'],
             worktree,
             approval,
-            { env: { GIT_INDEX_FILE: indexPath } },
+            { env: { GIT_INDEX_FILE: indexPath, GIT_LITERAL_PATHSPECS: '1' } },
           )
         ).stdout;
       },
@@ -198,13 +215,19 @@ export class PatchIntegrator {
     integrationWorktree: string,
     patchPath: string,
     approval: GitApproval,
+    options: { threeWay?: boolean } = {},
   ): Promise<IntegrationResult> {
     try {
       if ((await readFile(patchPath)).length === 0) {
         return { ok: true };
       }
       await this.executor.exec(
-        ['apply', '--whitespace=nowarn', patchPath],
+        [
+          'apply',
+          '--whitespace=nowarn',
+          ...(options.threeWay === true ? ['--3way'] : []),
+          patchPath,
+        ],
         integrationWorktree,
         approval,
       );

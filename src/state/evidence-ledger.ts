@@ -1,6 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { assertSafePath, durableWrite } from './state-store.js';
 import type { EvidenceRecord } from '../domain/types.js';
@@ -40,8 +40,32 @@ export class EvidenceLedger {
       }
     }
     try {
-      await assertSafePath(join(this.repoRoot, '.delivery'), this.path(runId));
-      return JSON.parse(await readFile(this.path(runId), 'utf8')) as EvidenceRecord[];
+      const target = this.path(runId);
+      await assertSafePath(join(this.repoRoot, '.delivery'), target);
+      const details = await lstat(target);
+      if (!details.isFile()) throw new Error('evidence index is not a regular file');
+      if (details.size > 16 * 1024 * 1024) throw new Error('evidence index is too large');
+      const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown;
+      if (!Array.isArray(parsed)) throw new Error('evidence index must be an array');
+      const evidenceDirectory = resolve(join(this.repoRoot, '.delivery', 'runs', runId, 'evidence'));
+      const valid = parsed.filter((record): record is EvidenceRecord => {
+        if (record === null || typeof record !== 'object') return false;
+        const candidate = record as Partial<EvidenceRecord>;
+        if (candidate.run_id !== runId) return false;
+        if (typeof candidate.id !== 'string' || typeof candidate.command !== 'string') return false;
+        if (typeof candidate.code_snapshot_id !== 'string') return false;
+        if (!['passed', 'failed', 'error'].includes(candidate.result as string)) return false;
+        if (!Array.isArray(candidate.acceptance_ids)) return false;
+        for (const logPath of [candidate.stdout_path, candidate.stderr_path]) {
+          if (logPath === undefined || logPath.length === 0) continue;
+          if (typeof logPath !== 'string') return false;
+          const resolved = resolve(isAbsolute(logPath) ? logPath : join(evidenceDirectory, logPath));
+          const relativePath = relative(evidenceDirectory, resolved);
+          if (relativePath.startsWith('..') || isAbsolute(relativePath)) return false;
+        }
+        return true;
+      });
+      return valid.slice(-10_000);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];

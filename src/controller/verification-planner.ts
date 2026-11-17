@@ -20,5 +20,24 @@ export function compileVerificationPlan(state: RunState): VerificationCheck[] {
       add(condition.verification.command, condition.verification.expected_exit_code, [condition.id]);
     }
   }
+  // Re-run every completed task's own checks at the accepted snapshot. Without
+  // this, a later integration invalidates the task evidence and requirement
+  // coverage can never be re-established; task-specific checks (lint,
+  // targeted suites) would also never be revalidated at completion time.
+  for (const task of state.graph.tasks) {
+    if (task.status !== 'DONE') continue;
+    for (const command of task.verification_commands) {
+      const condition = (state.graph.acceptance ?? []).find(
+        (candidate) =>
+          task.acceptance_ids.includes(candidate.id) &&
+          'command' in candidate.verification &&
+          candidate.verification.command === command,
+      );
+      const expected = condition !== undefined && 'expected_exit_code' in condition.verification
+        ? condition.verification.expected_exit_code
+        : 0;
+      add(command, expected, task.acceptance_ids);
+    }
+  }
   return [...checks.values()];
 }

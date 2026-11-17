@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, cp } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runSupervisedProcess } from '../runtime/process-supervisor.js';
 import type { EvidenceRecord, VerificationExecution } from '../domain/types.js';
 import { EvidenceStore } from './evidence-store.js';
+import { assertManagedWorktree } from '../workspace/worktree-manager.js';
+import { GuardedGitAdapter, createNodeGitExecutor } from '../workspace/git-adapter.js';
+
+const readOnlyGit = new GuardedGitAdapter(createNodeGitExecutor());
+
+async function assertCommandWorkspace(cwd: string, repoRoot: string): Promise<void> {
+  const relativeToRepo = relative(resolve(repoRoot), resolve(cwd));
+  if (isAbsolute(relativeToRepo) || relativeToRepo.startsWith('..')) return;
+  const segments = relativeToRepo.split(sep);
+  if (segments[0] !== '.delivery' || segments[1] !== 'runs') return;
+  await assertManagedWorktree(cwd, repoRoot, undefined, readOnlyGit);
+}
 
 export interface VerificationRequest {
   run_id: string;
@@ -33,7 +45,8 @@ export function redactLog(content: string): string {
     .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]');
 }
 
-async function runShell(request: VerificationRequest, terminationGraceMs: number, execution: VerificationExecution): Promise<ProcessOutcome> {
+async function runShell(request: VerificationRequest, terminationGraceMs: number, execution: VerificationExecution, repoRoot: string): Promise<ProcessOutcome> {
+  await assertCommandWorkspace(request.cwd, repoRoot);
   const allowedEnvironment = ['PATH', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'CI', 'JAVA_HOME', 'M2_HOME', 'MAVEN_HOME', 'GRADLE_USER_HOME', 'CARGO_HOME', 'GOPATH', 'GOCACHE'];
   const env = Object.fromEntries(allowedEnvironment.flatMap(name => process.env[name] === undefined ? [] : [[name, process.env[name]!]]));
   const directory = await mkdtemp(join(tmpdir(), 'delivery-verification-'));
@@ -81,14 +94,16 @@ async function runShell(request: VerificationRequest, terminationGraceMs: number
 
 export class CommandRunner {
   private readonly evidenceStore: EvidenceStore;
+  private readonly repoRoot: string;
 
   constructor(repoRoot: string, private readonly options: { terminationGraceMs?: number; execution?: VerificationExecution } = {}) {
+    this.repoRoot = repoRoot;
     this.evidenceStore = new EvidenceStore(repoRoot);
   }
 
   async run(request: VerificationRequest): Promise<EvidenceRecord> {
     const startedAt = new Date().toISOString();
-    const outcome = await runShell(request, this.options.terminationGraceMs ?? 5_000, this.options.execution ?? { backend: 'container' });
+    const outcome = await runShell(request, this.options.terminationGraceMs ?? 5_000, this.options.execution ?? { backend: 'container' }, this.repoRoot);
     const finishedAt = new Date().toISOString();
     const id = `E-${randomUUID()}`;
     const stdoutPath = await this.evidenceStore.write(

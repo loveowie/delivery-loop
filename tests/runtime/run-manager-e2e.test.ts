@@ -90,9 +90,10 @@ test('run manager completes a scripted-worker delivery loop against real Git', a
       prepared_directory: prepared,
       run_id: 'run-1',
       config_override: {verification:{execution:{backend:'trusted-host'}}},
+      allow_trusted_host: true,
     });
     let state = handle.state;
-    for (let attempt = 0; attempt < 100 && state.status !== 'COMPLETED'; attempt += 1) {
+    for (let attempt = 0; attempt < 500 && state.status !== 'COMPLETED'; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
       state = (await handle.store.readRun('run-1')) ?? state;
       if (['BLOCKED', 'CANCELLED'].includes(state.status)) {

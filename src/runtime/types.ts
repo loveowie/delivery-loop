@@ -8,6 +8,8 @@ export interface StartRunInput {
   prepared_directory: string;
   run_id?: string | undefined;
   config_override?: DeepPartial<DeliveryConfig> | undefined;
+  /** Explicit user confirmation for host-shell verification. */
+  allow_trusted_host?: boolean | undefined;
 }
 
 export interface RuntimeHandle {

@@ -151,6 +151,25 @@
             "additionalProperties": false
           }
         },
+        "baseline": {
+          "type": "object",
+          "properties": {
+            "verification_id": {
+              "type": "string"
+            },
+            "failed_commands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "verification_id",
+            "failed_commands"
+          ],
+          "additionalProperties": false
+        },
         "failure": {}
       },
       "required": [

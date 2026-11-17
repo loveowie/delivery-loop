@@ -1,4 +1,4 @@
-import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { access, open, readdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { EvidenceLedger } from '../state/evidence-ledger.js';
 import { StateStore } from '../state/state-store.js';
@@ -116,8 +116,41 @@ function assertSafeRelativePath(path: string): void {
   if (path.length === 0 || path.includes('\0')) throw new Error('invalid file path');
   const normalized = path.replaceAll('\\', '/');
   if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) throw new Error('file path must be relative');
-  if (normalized.split('/').includes('..')) throw new Error('file path cannot escape its root');
-  if (normalized === '.git' || normalized.startsWith('.git/')) throw new Error('the git directory is not readable');
+  const segments = normalized.split('/').filter((segment) => segment !== '' && segment !== '.');
+  if (segments.includes('..')) throw new Error('file path cannot escape its root');
+  // Deny any .git segment, not just a leading one; `./.git/config` and
+  // `.GIT/config` on case-insensitive filesystems are the same directory.
+  if (segments.some((segment) => segment.toLowerCase() === '.git')) {
+    throw new Error('the git directory is not readable');
+  }
+}
+
+function assertCommitLike(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[0-9a-f]{7,64}$/i.test(value) ? value : undefined;
+}
+
+async function assertStateRoots(state: RunState, root: string): Promise<void> {
+  const rootResolved = resolve(root);
+  const stateRoot = resolve(state.repo_root);
+  const rootReal = await realpath(rootResolved).catch(() => rootResolved);
+  const stateRootReal = await realpath(stateRoot).catch(() => stateRoot);
+  if (stateRootReal !== rootReal) {
+    throw new Error('run state repo_root does not match the repository that contains it');
+  }
+  const worktreesRoot = resolve(rootReal, '.delivery', 'runs', state.run_id, 'worktrees');
+  for (const candidate of [
+    state.integration_worktree,
+    ...state.graph.tasks.map((task) => task.workspace_path),
+  ]) {
+    if (candidate === undefined) continue;
+    const resolved = resolve(candidate);
+    const candidateReal = await realpath(resolved).catch(() => resolved);
+    if (candidateReal === rootReal) continue; // legacy/test runs may point at the checkout
+    const relativePath = relative(worktreesRoot, candidateReal);
+    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+      throw new Error('run state references a path outside its managed worktrees');
+    }
+  }
 }
 
 async function canonicalRepoRoot(path: string): Promise<string> {
@@ -144,17 +177,35 @@ async function readBoundedFile(root: string, path: string, limit: number): Promi
   }
   const details = await stat(realTarget);
   if (!details.isFile()) throw new Error('path is not a regular file');
-  const buffer = await readFile(realTarget);
+  const readLength = Math.min(details.size, limit);
+  const buffer = Buffer.alloc(readLength);
+  if (readLength > 0) {
+    const handle = await open(realTarget, 'r');
+    try {
+      await handle.read(buffer, 0, readLength, 0);
+    } finally {
+      await handle.close();
+    }
+  }
   const binary = buffer.subarray(0, Math.min(buffer.length, 8_000)).includes(0);
-  const content = binary ? '' : buffer.subarray(0, limit).toString('utf8');
+  const content = binary ? '' : buffer.toString('utf8');
   return {
     path,
     source: 'worktree',
     content: content.replaceAll('\r\n', '\n'),
-    truncated: buffer.length > limit,
+    truncated: details.size > limit,
     binary,
-    size: buffer.length,
+    size: details.size,
   };
+}
+
+async function readSafeText(root: string, relativePath: string, limit: number): Promise<string> {
+  try {
+    const preview = await readBoundedFile(root, relativePath, limit);
+    return preview.content;
+  } catch {
+    return '';
+  }
 }
 
 function kindOf(path: string): ArtifactEntry['kind'] {
@@ -185,12 +236,7 @@ function countTasks(state: RunState): { counts: Record<string, number>; done: nu
 
 async function summarize(store: StateStore, state: RunState): Promise<RunSummary> {
   const counts = countTasks(state);
-  let spec = '';
-  try {
-    spec = await readFile(join(store.getRunDirectory(state.run_id), 'spec.md'), 'utf8');
-  } catch {
-    // A run without a spec is still listable.
-  }
+  const spec = await readSafeText(store.getRunDirectory(state.run_id), 'spec.md', 6_000);
   return {
     run_id: state.run_id,
     status: state.status,
@@ -246,6 +292,7 @@ async function listArtifacts(root: string, current = root, depth = 0): Promise<A
 }
 
 async function gitChangedFiles(worktree: string, baseline: string | undefined): Promise<string[]> {
+  baseline = assertCommitLike(baseline);
   const exec = createNodeGitExecutor();
   const changed = new Set<string>();
   try {
@@ -377,7 +424,7 @@ export class DeliveryViewService {
       } catch {
         return [];
       }
-      const store = await StateStore.open(root);
+      const store = await StateStore.openRead(root);
       const runs = await store.listRuns();
       return await Promise.all(runs.map(async (state) => await summarize(store, state)));
     }
@@ -388,7 +435,7 @@ export class DeliveryViewService {
       if (seen.has(entry.run_id)) continue;
       seen.add(entry.run_id);
       try {
-        const store = await StateStore.open(entry.repo_root);
+        const store = await StateStore.openRead(entry.repo_root);
         const state = await store.readRun(entry.run_id);
         if (state !== undefined) summaries.push(await summarize(store, state));
       } catch {
@@ -400,9 +447,10 @@ export class DeliveryViewService {
 
   async getStatus(runId: string, repoRoot?: string): Promise<RunSummary> {
     const root = await this.resolveRepoRoot(runId, repoRoot);
-    const store = await StateStore.open(root);
+    const store = await StateStore.openRead(root);
     const state = await store.readRun(runId);
     if (state === undefined) throw new Error(`run not found: ${runId}`);
+    await assertStateRoots(state, root);
     return await summarize(store, state);
   }
 
@@ -414,19 +462,25 @@ export class DeliveryViewService {
     const includeFiles = options.includeFiles !== false;
     const includeArtifacts = options.includeArtifacts !== false;
     const root = await this.resolveRepoRoot(runId, repoRoot);
-    const store = await StateStore.open(root);
+    const store = await StateStore.openRead(root);
     const state = await store.readRun(runId);
     if (state === undefined) throw new Error(`run not found: ${runId}`);
+    await assertStateRoots(state, root);
     const summary = await summarize(store, state);
     const runDirectory = store.getRunDirectory(runId);
     const [events, evidence, artifacts, spec] = await Promise.all([
       store.readEvents(runId, EVENT_LIMIT),
       new EvidenceLedger(root).readAll(runId),
       includeArtifacts ? listArtifacts(runDirectory) : Promise.resolve([]),
-      readFile(join(runDirectory, 'spec.md'), 'utf8').catch(() => ''),
+      readSafeText(runDirectory, 'spec.md', 6_000),
     ]);
-    const worktree = state.integration_worktree ?? null;
-    const changed = includeFiles && worktree !== null ? await gitChangedFiles(worktree, state.baseline_commit) : [];
+    const worktree = state.integration_worktree !== undefined
+      && this.isValidWorktreePath(state, state.integration_worktree, root)
+      ? state.integration_worktree
+      : null;
+    const changed = includeFiles && worktree !== null
+      ? await gitChangedFiles(worktree, state.baseline_commit)
+      : [];
     return {
       ...summary,
       spec_excerpt: spec.slice(0, 6_000),
@@ -490,18 +544,21 @@ export class DeliveryViewService {
     taskId?: string,
   ): Promise<FilePreview> {
     const root = await this.resolveRepoRoot(runId, repoRoot);
-    const store = await StateStore.open(root);
+    const store = await StateStore.openRead(root);
     const state = await store.readRun(runId);
     if (state === undefined) throw new Error(`run not found: ${runId}`);
+    await assertStateRoots(state, root);
     if (source === 'artifact') {
       const preview = await readBoundedFile(store.getRunDirectory(runId), path, FILE_READ_LIMIT);
       return { ...preview, source };
     }
     if (source === 'repo') {
-      const preview = await readBoundedFile(state.repo_root, path, FILE_READ_LIMIT);
+      // Always read from the canonical repository root, never from a
+      // state-supplied path.
+      const preview = await readBoundedFile(root, path, FILE_READ_LIMIT);
       return { ...preview, source };
     }
-    for (const worktree of this.worktreeCandidates(state, taskId)) {
+    for (const worktree of this.worktreeCandidates(state, taskId, root)) {
       try {
         const preview = await readBoundedFile(worktree, path, FILE_READ_LIMIT);
         return { ...preview, source };
@@ -519,26 +576,50 @@ export class DeliveryViewService {
     taskId?: string,
   ): Promise<string> {
     const root = await this.resolveRepoRoot(runId, repoRoot);
-    const store = await StateStore.open(root);
+    const store = await StateStore.openRead(root);
     const state = await store.readRun(runId);
     if (state === undefined) throw new Error(`run not found: ${runId}`);
+    await assertStateRoots(state, root);
     assertSafeRelativePath(path);
-    for (const worktree of this.worktreeCandidates(state, taskId)) {
-      const diff = await diffInWorktree(worktree, path, state.baseline_commit);
-      if (diff.length > 0) return diff;
+    const baseline = assertCommitLike(state.baseline_commit);
+    for (const worktree of this.worktreeCandidates(state, taskId, root)) {
+      try {
+        const diff = await diffInWorktree(worktree, path, baseline);
+        if (diff.length > 0) return diff;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
     }
     return '';
   }
 
-  private worktreeCandidates(state: RunState, taskId?: string): string[] {
+  private isValidWorktreePath(state: RunState, path: string, root: string): boolean {
+    const resolved = resolve(path);
+    const rootResolved = resolve(root);
+    if (resolved === rootResolved || resolved === resolve(state.repo_root)) return true;
+    const worktreesRoot = resolve(rootResolved, '.delivery', 'runs', state.run_id, 'worktrees');
+    const relativePath = relative(worktreesRoot, resolved);
+    return !relativePath.startsWith('..') && !isAbsolute(relativePath);
+  }
+
+  private worktreeCandidates(state: RunState, taskId: string | undefined, root: string): string[] {
     const candidates: string[] = [];
     if (taskId !== undefined) {
       const task = state.graph.tasks.find((candidate) => candidate.id === taskId);
-      if (task?.workspace_path !== undefined) candidates.push(task.workspace_path);
+      if (task?.workspace_path !== undefined && this.isValidWorktreePath(state, task.workspace_path, root)) {
+        candidates.push(task.workspace_path);
+      }
     }
-    if (state.integration_worktree !== undefined) candidates.push(state.integration_worktree);
+    if (state.integration_worktree !== undefined && this.isValidWorktreePath(state, state.integration_worktree, root)) {
+      candidates.push(state.integration_worktree);
+    }
     for (const task of state.graph.tasks) {
-      if (task.workspace_path !== undefined && !candidates.includes(task.workspace_path)) {
+      if (
+        task.workspace_path !== undefined &&
+        this.isValidWorktreePath(state, task.workspace_path, root) &&
+        !candidates.includes(task.workspace_path)
+      ) {
         candidates.push(task.workspace_path);
       }
     }
@@ -547,6 +628,7 @@ export class DeliveryViewService {
 }
 
 async function diffInWorktree(worktree: string, path: string, baseline: string | undefined): Promise<string> {
+  baseline = assertCommitLike(baseline);
   const exec = createNodeGitExecutor();
   if (baseline !== undefined) {
     const result = await exec(['diff', '--no-color', '--unified=3', baseline, '--', path], worktree);
