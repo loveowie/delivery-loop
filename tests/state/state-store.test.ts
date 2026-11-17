@@ -4,7 +4,7 @@ import { mkdtemp, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../../src/state/state-store.js';
-import type { DeliveryConfig, RunState, TaskGraph } from '../../src/domain/types.js';
+import type { DeliveryConfig, RunState, TaskGraph, TaskNode } from '../../src/domain/types.js';
 import { DEFAULT_CONFIG } from '../../src/config/config.js';
 
 function runState(runId: string): RunState {
@@ -66,38 +66,41 @@ test('serializes concurrent state updates from different process-like callers', 
   const second = await StateStore.open(repo);
   await first.createRun(runState('run-1'));
 
+  // Both callbacks must be order-independent: whichever update acquires the
+  // state lock first, the other appends its task to the result. Replacing the
+  // array (and reading tasks[0] before appending) made this test randomly fail
+  // depending on lock acquisition order.
+  const baseTask: TaskNode = {
+    id: 'A',
+    type: 'implementation',
+    title: 'A',
+    status: 'READY',
+    priority: 'normal',
+    risk: 'low',
+    origin: 'initial_plan',
+    depends_on: [],
+    requirement_ids: [],
+    acceptance_ids: [],
+    scope_paths: ['src/a'],
+    required_outputs: ['code'],
+    worker_role: 'implementer',
+    capability_profile: 'portable',
+    attempt: 0,
+    max_attempts: 3,
+    verification_commands: [],
+    review_policy: 'none',
+  };
+  const taskA: TaskNode = { ...baseTask, id: 'A' };
+  const taskB: TaskNode = { ...baseTask, id: 'B' };
+
   await Promise.all([
     first.updateRun('run-1', (state) => ({
       ...state,
-      graph: {
-        ...state.graph,
-        tasks: [
-          {
-            id: 'A',
-            type: 'implementation',
-            title: 'A',
-            status: 'READY',
-            priority: 'normal',
-            risk: 'low',
-            origin: 'initial_plan',
-            depends_on: [],
-            requirement_ids: [],
-            acceptance_ids: [],
-            scope_paths: ['src/a'],
-            required_outputs: ['code'],
-            worker_role: 'implementer',
-            capability_profile: 'portable',
-            attempt: 0,
-            max_attempts: 3,
-            verification_commands: [],
-            review_policy: 'none',
-          },
-        ],
-      },
+      graph: { ...state.graph, tasks: [...state.graph.tasks, taskA] },
     })),
     second.updateRun('run-1', (state) => ({
       ...state,
-      graph: { ...state.graph, tasks: [...state.graph.tasks, { ...state.graph.tasks[0]!, id: 'B' }] },
+      graph: { ...state.graph, tasks: [...state.graph.tasks, taskB] },
     })),
   ]);
 
