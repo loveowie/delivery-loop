@@ -7,7 +7,7 @@ import { DeliveryRunManager } from '../runtime/run-manager.js';
 import { RuntimeFactory } from '../runtime/runtime-factory.js';
 import { DeliveryService } from '../service/delivery-service.js';
 import { RunRegistry } from '../runtime/run-registry.js';
-import { DshSubagentWorkerAdapter } from '../workers/dsh-subagent-adapter.js';
+import { DshSubagentWorkerAdapter, agentIsLive } from '../workers/dsh-subagent-adapter.js';
 import type { DshAgent } from '../workers/dsh-subagent-adapter.js';
 import { DeliveryViewService } from './view-service.js';
 import type { RunDetail, RunSummary } from './view-service.js';
@@ -425,6 +425,98 @@ function registerWebApi(ctx: any, options: {
   }), 'delivery-loop: web api');
 }
 
+export interface ParentAgentService {
+  get(id: string): DshAgent | undefined;
+  list?(): DshAgent[];
+  create?(spec: {
+    sessionId: string;
+    meta: { cwd: string };
+    agentOptions?: Record<string, unknown>;
+  }): Promise<{ agent: DshAgent; dispose(): Promise<void> }>;
+}
+
+export interface ParentFallbackOptions {
+  agents: ParentAgentService | undefined;
+  /**
+   * The Agent that initiated the current tool call. A live initiating Agent is
+   * preferred over any Agent that merely appears in `agents.list()`.
+   */
+  preferredAgent?: () => DshAgent | undefined;
+  /** Default model selection for a newly created coordinator Agent. */
+  modelSelection?: () => Record<string, unknown> | undefined;
+  cwd?: () => string;
+  newSessionId?: () => string;
+  warn?: (message: string, error: unknown) => void;
+}
+
+/**
+ * Resolve the parent Agent used to start delivery Workers.
+ *
+ * After a Host restart the remembered parent or the first listed Agent may be
+ * a disposed fiber (uid null); starting a subagent on it throws "cannot create
+ * effect on inactive context" and blocks the run. Only live, registered Agents
+ * are eligible, and a disposed coordinator is rebuilt.
+ */
+export class ParentFallback {
+  private readonly options: ParentFallbackOptions;
+  private coordinator: DshAgent | undefined;
+  private coordinatorHandle: { dispose(): Promise<void> } | undefined;
+
+  constructor(options: ParentFallbackOptions) {
+    this.options = options;
+  }
+
+  private isUsable(agent: DshAgent | undefined): agent is DshAgent {
+    if (!agentIsLive(agent)) return false;
+    const registry = this.options.agents;
+    if (registry?.get === undefined) return true;
+    return registry.get(agent.id) === agent;
+  }
+
+  async fallbackParent(): Promise<DshAgent | undefined> {
+    const preferred = this.options.preferredAgent?.();
+    if (this.isUsable(preferred)) return preferred;
+
+    for (const candidate of this.options.agents?.list?.() ?? []) {
+      if (this.isUsable(candidate)) return candidate;
+    }
+
+    if (this.isUsable(this.coordinator)) return this.coordinator;
+
+    const agents = this.options.agents;
+    if (agents?.create === undefined) return undefined;
+
+    // A disposed coordinator can never be reused; drop its handle first.
+    await this.dispose();
+    const agentOptions = this.options.modelSelection?.();
+    try {
+      const handle = await agents.create({
+        sessionId: this.options.newSessionId?.() ?? `delivery-coordinator-${randomUUID()}`,
+        meta: { cwd: this.options.cwd?.() ?? process.cwd() },
+        ...(agentOptions === undefined ? {} : { agentOptions }),
+      });
+      this.coordinatorHandle = handle;
+      this.coordinator = handle.agent;
+      return this.coordinator;
+    } catch (error) {
+      (this.options.warn ?? ((message, cause) => console.warn(message, cause)))(
+        '[delivery-loop] cannot create a fallback coordinator Agent:',
+        error,
+      );
+      return undefined;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    const handle = this.coordinatorHandle;
+    this.coordinatorHandle = undefined;
+    this.coordinator = undefined;
+    if (handle !== undefined) {
+      await handle.dispose().catch(() => undefined);
+    }
+  }
+}
+
 /**
  * Host half of the Delivery Loop bundle: native tools, the delivery view API,
  * the run skill, and a short prompt section.
@@ -443,41 +535,26 @@ export function apply(ctx: any, rawConfig: unknown): void {
     parentByRun.set(runId, agent);
   };
 
-  let coordinatorHandle: { dispose(): Promise<void> } | undefined;
-  let coordinator: DshAgent | undefined;
-  const fallbackParent = async (): Promise<DshAgent | undefined> => {
-    // Prefer a live, tool-owning Agent. The initiating Agent is normally
-    // remembered by every delivery tool call, so this path is only for a run
-    // recovered without one. A freshly created coordinator is the last resort:
-    // it has a fresh context but may inherit a minimal tool set.
-    const live = agents?.list?.()[0] as DshAgent | undefined;
-    if (live !== undefined) return live;
-    if (coordinator !== undefined && agents?.get?.(coordinator.id) === coordinator) return coordinator;
-    if (typeof agents?.create !== 'function') return undefined;
-    const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.();
-    const agentOptions = selection === undefined || selection === null
-      ? undefined
-      : {
+  /** Most recent tool call's Agent: the preferred parent for worker startup. */
+  let initiatingAgent: DshAgent | undefined;
+  const parentFallback = new ParentFallback({
+    agents: agents as ParentAgentService | undefined,
+    preferredAgent: () => initiatingAgent,
+    modelSelection: () => {
+      const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.();
+      if (selection === undefined || selection === null) return undefined;
+      return {
         ...(typeof selection.provider === 'string' ? { provider: selection.provider } : {}),
         ...(typeof selection.model === 'string' ? { model: selection.model } : {}),
         ...(typeof selection.reasoningEffort === 'string' ? { reasoningEffort: selection.reasoningEffort } : {}),
       };
-    try {
-      const handle = await agents.create({
-        sessionId: `delivery-coordinator-${randomUUID()}`,
-        meta: { cwd: process.cwd() },
-        ...(agentOptions === undefined ? {} : { agentOptions }),
-      });
-      coordinatorHandle = handle;
-      coordinator = handle.agent as DshAgent;
-      return coordinator;
-    } catch (error) {
-      console.warn('[delivery-loop] cannot create a fallback coordinator Agent:', error);
-      return undefined;
-    }
-  };
+    },
+    warn: (message, error) => console.warn(message, error),
+  });
+  const fallbackParent = async (): Promise<DshAgent | undefined> =>
+    await parentFallback.fallbackParent();
   ctx.effect(() => () => {
-    void coordinatorHandle?.dispose();
+    void parentFallback.dispose();
   }, 'delivery-loop: coordinator');
 
   const workerAdapter = agents !== undefined && subagents !== undefined
@@ -510,7 +587,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
   });
   const service = new DeliveryService(
     manager,
-    async (action, handle, context) => await manager.executeFinalize(action, handle, context),
+    async (action, state, context) => await manager.executeFinalize(action, state, context),
   );
   const view = new DeliveryViewService(registry);
   const viewToken = randomBytes(24).toString('hex');
@@ -748,14 +825,15 @@ export function apply(ctx: any, rawConfig: unknown): void {
 
   for (const definition of tools) {
     const execute = definition.execute;
-    // A Host restart or plugin reload drops the in-memory run -> initiating
-    // Agent map. Any later delivery_* call addresses a run from a live Agent
-    // that owns tools, so record that Agent as the run's parent before the
-    // action. Without this, recovered workers fall back to an arbitrary Agent
-    // (or a tool-less coordinator) and cannot edit files.
-    definition.execute = async (args, exec) => {
-      const runId = typeof args.run_id === 'string' && args.run_id.length > 0 ? args.run_id : undefined;
-      if (runId !== undefined && exec.agent !== undefined) rememberParent(runId, exec.agent);
+    // The most recent delivery tool call identifies the Agent a worker
+    // should be parented to when the remembered parent was disposed, and also
+    // records that Agent as the run's parent for a recovery after a reload.
+    definition.execute = async (args: Record<string, unknown>, exec: ToolExecutionLike) => {
+      if (exec.agent !== undefined) {
+        initiatingAgent = exec.agent;
+        const runId = typeof args.run_id === 'string' && args.run_id.length > 0 ? args.run_id : undefined;
+        if (runId !== undefined) rememberParent(runId, exec.agent);
+      }
       return await execute(args, exec);
     };
     ctx.tools.register(definition);

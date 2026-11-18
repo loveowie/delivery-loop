@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { access, copyFile, lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -155,7 +156,6 @@ export class PatchIntegrator {
     );
     const path = join(outputDirectory, 'delivery.patch');
     await writeFile(path, content, 'utf8');
-    const { createHash } = await import('node:crypto');
     return { path, sha256: createHash('sha256').update(content).digest('hex') };
   }
 
@@ -204,7 +204,6 @@ export class PatchIntegrator {
     );
     const path = join(outputDirectory, 'task.patch');
     await writeFile(path, content, 'utf8');
-    const { createHash } = await import('node:crypto');
     return {
       path,
       sha256: createHash('sha256').update(content).digest('hex'),
@@ -215,10 +214,17 @@ export class PatchIntegrator {
     integrationWorktree: string,
     patchPath: string,
     approval: GitApproval,
-    options: { threeWay?: boolean } = {},
+    options: { threeWay?: boolean; expectedSha256?: string } = {},
   ): Promise<IntegrationResult> {
     try {
-      if ((await readFile(patchPath)).length === 0) {
+      const content = await readFile(patchPath);
+      if (options.expectedSha256 !== undefined) {
+        const digest = createHash('sha256').update(content).digest('hex');
+        if (digest !== options.expectedSha256) {
+          return { ok: false, error: `patch digest mismatch for ${patchPath}` };
+        }
+      }
+      if (content.length === 0) {
         return { ok: true };
       }
       await this.executor.exec(

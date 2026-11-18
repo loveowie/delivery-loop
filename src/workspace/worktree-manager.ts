@@ -1,10 +1,11 @@
-import { access, lstat, mkdir, realpath } from 'node:fs/promises';
+import { access, lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { RunState, TaskNode } from '../domain/types.js';
 import type { TaskWorkspace, WorktreeProvider } from '../controller/delivery-controller.js';
 import { GuardedGitAdapter, createNodeGitExecutor } from './git-adapter.js';
 import type { GitExecutor } from './git-adapter.js';
 import type { PatchArtifact } from './patch-integrator.js';
+import { createCodeSnapshot } from './repository-context.js';
 
 interface SeedPatchIntegrator {
   freezeDeltaBase?(worktree: string): Promise<void>;
@@ -26,7 +27,7 @@ interface SeedPatchIntegrator {
     integrationWorktree: string,
     patchPath: string,
     approval: { run_id: string },
-    options?: { threeWay?: boolean },
+    options?: { threeWay?: boolean; expectedSha256?: string },
   ): Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -120,6 +121,43 @@ export async function assertManagedWorktree(
   }
 }
 
+/**
+ * Narrow a managed-worktree check to the worktrees directory of one run.
+ *
+ * Finalization is a Git write operation, so it must never run in a directory
+ * that merely shares `<repo>/.delivery/runs` with this run — for example a
+ * different run's or a copied worktree with identical content.
+ */
+export async function assertRunWorktree(
+  workdir: string,
+  repoRoot: string,
+  runId: string,
+): Promise<void> {
+  const runWorktrees = join(
+    resolve(repoRoot),
+    '.delivery',
+    'runs',
+    safeSegment(runId),
+    'worktrees',
+  );
+  let expectedRoot: string;
+  try {
+    expectedRoot = await realpath(runWorktrees);
+  } catch {
+    throw new Error(`run worktree root is missing for run ${runId}: ${runWorktrees}`);
+  }
+  const actual = await realpath(resolve(workdir));
+  const relativeToRun = relative(expectedRoot, actual);
+  if (
+    isAbsolute(relativeToRun) ||
+    relativeToRun.length === 0 ||
+    relativeToRun === '..' ||
+    relativeToRun.startsWith(`..${sep}`)
+  ) {
+    throw new Error(`worktree is not inside the run's worktrees directory: ${actual}`);
+  }
+}
+
 function isManagedPath(path: string, repoRoot: string): boolean {
   const relativeToRepo = relative(resolve(repoRoot), resolve(path));
   return !isAbsolute(relativeToRepo)
@@ -208,10 +246,21 @@ export class WorktreeManager implements WorktreeProvider {
       path,
       patch.path,
       { run_id: state.run_id },
+      { expectedSha256: patch.sha256 },
     );
     if (!applied.ok) {
       throw new Error(`failed to seed task worktree: ${applied.error ?? 'unknown error'}`);
     }
+  }
+
+  private async baselineSnapshotId(path: string): Promise<string> {
+    const git = this.git;
+    const snapshot = await createCodeSnapshot(path, {
+      async exec(args, workdir) {
+        return (await git.exec(args, workdir)).stdout;
+      },
+    });
+    return snapshot.id;
   }
 
   private async seedNewWorktree(
@@ -234,6 +283,16 @@ export class WorktreeManager implements WorktreeProvider {
     await mkdir(seedDirectory, { recursive: true });
     const acceptedSeed = state.integration_worktree;
     if (acceptedSeed !== undefined) {
+      // A worker can remove or rewrite `.git` between integration and this
+      // export. Without its own .git entry every git command silently falls
+      // back to the outer checkout, producing an empty patch that would drop
+      // already accepted work.
+      await assertManagedWorktree(
+        acceptedSeed,
+        state.repo_root,
+        state.baseline_commit ?? 'HEAD',
+        this.git,
+      );
       const acceptedPatch = await this.patchIntegrator.exportTaskPatch(
         acceptedSeed,
         state.baseline_commit ?? 'HEAD',
@@ -241,6 +300,22 @@ export class WorktreeManager implements WorktreeProvider {
         await this.untrackedFiles(acceptedSeed),
         { run_id: state.run_id },
       );
+      if (state.integration_snapshot_id !== undefined) {
+        const content = await readFile(acceptedPatch.path);
+        // An empty patch is only legitimate when the accepted integration
+        // itself is the baseline (e.g. a task that changed nothing). If the
+        // accepted snapshot differs from the baseline yet the export is empty,
+        // already accepted content was lost: fail closed instead of silently
+        // starting the task from the baseline.
+        if (
+          content.length === 0 &&
+          state.integration_snapshot_id !== await this.baselineSnapshotId(path)
+        ) {
+          throw new Error(
+            `accepted integration seed produced an empty patch for run ${state.run_id}; refusing to start a task from the baseline`,
+          );
+        }
+      }
       await this.applySeedPatch(path, acceptedPatch, state);
       await this.git.exec(['add', '-A'], path, { run_id: state.run_id });
     }

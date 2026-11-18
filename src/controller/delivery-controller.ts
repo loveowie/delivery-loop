@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { writeDeliveryReport } from '../reporting/report-writer.js';
 import { compileVerificationPlan } from './verification-planner.js';
-import { evaluateAcceptance } from './acceptance.js';
+import { evaluateAcceptance, acceptedContentSnapshotId, NO_ACCEPTED_SNAPSHOT } from './acceptance.js';
 import { blockingFindings } from './review-cycle.js';
 import { failureFingerprint } from '../scheduler/failure-fingerprint.js';
 import { durationExceeded } from '../runtime/loop-guards.js';
@@ -87,6 +87,14 @@ function roleForTask(task: TaskNode): WorkerRole {
   return task.worker_role;
 }
 
+/** Task states that may still be persisted when a controller dies mid-tick. */
+const IN_FLIGHT_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set([
+  'RUNNING',
+  'VERIFYING',
+  'REVIEWING',
+  'INTEGRATING',
+]);
+
 function taskRequiresReview(task: TaskNode, config: RunState['config']): boolean {
   if (task.worker_role === 'reviewer' || task.worker_role === 'acceptance') {
     return false;
@@ -115,9 +123,10 @@ function normalizeBlockers(
     .filter((blocker) => typeof blocker.decision_id === 'string' && blocker.decision_id.length > 0)
     .map((blocker) => ({
       ...blocker,
-      affected_task_ids: blocker.affected_task_ids.length > 0
-        ? blocker.affected_task_ids
-        : [taskId],
+      // The reporting task is always affected by its own blocker. Without this,
+      // a worker that names only downstream tasks leaves itself stuck in
+      // INTERRUPTED forever: `respond` only requeues the mapped tasks.
+      affected_task_ids: [...new Set([taskId, ...blocker.affected_task_ids])],
     }));
   if (valid.length > 0) {
     return valid;
@@ -1052,6 +1061,12 @@ export class DeliveryController {
         );
         if (source?.status === 'FIX_REQUIRED') {
           changeTask(draft, source.id, 'PENDING');
+          // The repair task integrated the missing output into the seed, so the
+          // source task's next attempt diff starts after it. Re-checking the
+          // original required_outputs against that now-empty diff would block
+          // every repaired task; the repair chain carries the accepted output,
+          // matching the semantics of the repair task's own empty list.
+          source.required_outputs = [];
           delete source.seed_worktree;
           delete source.failure_context;
         }
@@ -1273,7 +1288,12 @@ export class DeliveryController {
         });
       }
     }
-    if (state.config.review.final_review) {
+    // A final review only exists to review accepted integration content. Without
+    // an integration snapshot (zero-task or review/acceptance-only deliveries)
+    // the review never binds to a snapshot, so every tick would reset its DONE
+    // task back to READY and the run could never complete.
+    const acceptedIntegrationSnapshotId = state.integration_snapshot_id;
+    if (state.config.review.final_review && acceptedIntegrationSnapshotId !== undefined) {
       const finalReview = state.graph.tasks.find((task) => task.id === 'FINAL-REVIEW');
       if (finalReview === undefined) {
         await recordDecision(this.options.store, {
@@ -1308,19 +1328,62 @@ export class DeliveryController {
             worker_role: 'reviewer',
             capability_profile: draft.config.profile,
             attempt: 0,
-            max_attempts: 1,
+            // Retry budget comes from the run configuration: resetting a stale
+            // review must be able to claim a new attempt, and the cost must be
+            // counted like every other task retry.
+            max_attempts: draft.config.runtime.max_task_attempts,
             verification_commands: [],
             review_policy: 'none',
           });
           return draft;
         });
       }
-      if (finalReview.status === 'DONE' && finalReview.code_snapshot_id !== state.integration_snapshot_id) {
-        return await this.updateRun(state.run_id, draft => {
-          changeTask(draft, 'FINAL-REVIEW', 'READY');
+      if (
+        finalReview.status === 'DONE' &&
+        finalReview.code_snapshot_id !== acceptedIntegrationSnapshotId
+      ) {
+        let budgetExhausted = false;
+        const next = await this.updateRun(state.run_id, draft => {
+          if (draft.status === 'CANCELLED') return draft;
+          const draftReview = draft.graph.tasks.find((task) => task.id === 'FINAL-REVIEW');
+          if (draftReview === undefined) return draft;
+          // The final review is controller-owned; its retry budget is the run
+          // configuration so raising `max_task_attempts` on resume can recover
+          // a review whose content kept changing.
+          const effectiveMaxAttempts = draft.config.runtime.max_task_attempts;
+          if (draftReview.attempt + 1 >= effectiveMaxAttempts) {
+            budgetExhausted = true;
+            draft.last_error = `final review retry budget exhausted for ${draftReview.id}`;
+            if (draft.status !== 'BLOCKED') changeRun(draft, 'BLOCKED');
+            return draft;
+          }
+          // Reusing the old attempt path would reuse the stale worktree and its
+          // old snapshot, so the snapshot comparison would fail on every tick.
+          // A new attempt gets a new worktree seeded from the current accepted
+          // integration content.
+          draftReview.attempt += 1;
+          delete draftReview.seed_worktree;
+          delete draftReview.failure_context;
+          changeTask(draft, draftReview.id, 'READY');
           if (draft.status === 'VERIFYING') changeRun(draft, 'RUNNING');
           return draft;
         });
+        await recordDecision(this.options.store, {
+          run_id: state.run_id,
+          phase: 'review',
+          code: budgetExhausted ? 'final_review_budget_exhausted' : 'final_review_reset',
+          title: budgetExhausted ? '最终评审重试预算耗尽' : '集成内容已变化，重新安排最终评审',
+          detail: budgetExhausted
+            ? '最终评审重试次数已达上限；集成内容在评审后再次变化，请提高 max_task_attempts 或新建运行。'
+            : `最终评审快照 ${finalReview.code_snapshot_id ?? '(none)'} 与已接受集成快照 ${acceptedIntegrationSnapshotId} 不一致，使用新 attempt 重新评审。`,
+          outcome: budgetExhausted ? 'blocked' : 'info',
+          data: {
+            reviewed_snapshot_id: finalReview.code_snapshot_id ?? null,
+            accepted_snapshot_id: acceptedIntegrationSnapshotId,
+            attempt: finalReview.attempt + (budgetExhausted ? 0 : 1),
+          },
+        });
+        return next;
       }
       if (finalReview.status !== 'DONE') {
         return state;
@@ -1423,7 +1486,7 @@ export class DeliveryController {
         return draft;
       });
     }
-    const latestSnapshot = state.integration_snapshot_id ?? state.graph.tasks.at(-1)?.code_snapshot_id;
+    const latestSnapshot = acceptedContentSnapshotId(state);
     const persistedEvidence = await this.evidenceLedger?.readAll(state.run_id);
     const acceptanceEvidence = persistedEvidence ?? this.evidence;
     const artifactConditions = (state.graph.acceptance ?? []).filter(
@@ -1674,8 +1737,28 @@ export class DeliveryController {
         } else if (task.status === 'INTERRUPTED') {
           changeTask(draft, task.id, 'READY');
           requeued.push(task.id);
+        } else if (IN_FLIGHT_TASK_STATUSES.has(task.status)) {
+          // A tick failure blocks the run without touching the task that was
+          // executing. `resume` must adopt these states, or the run has no
+          // normal way out ("no task can be resumed"). Adopting an in-flight
+          // task costs an attempt, matching the worker-failure budget.
+          changeTask(draft, task.id, 'INTERRUPTED');
+          if (task.workspace_path !== undefined) task.seed_worktree = task.workspace_path;
+          task.attempt += 1;
+          if (task.attempt >= effectiveMaxAttempts) {
+            changeTask(draft, task.id, 'BLOCKED');
+            remainingBlocked = true;
+          } else {
+            changeTask(draft, task.id, 'READY');
+            requeued.push(task.id);
+          }
         }
       }
+      // Tasks adopted by this resume are no longer executing; keep only tasks
+      // that are still genuinely in flight (e.g. one awaiting a decision).
+      draft.current_task_ids = draft.graph.tasks
+        .filter((task) => IN_FLIGHT_TASK_STATUSES.has(task.status))
+        .map((task) => task.id);
       const allDone = draft.graph.tasks.every(
         (task) => task.status === 'DONE' || task.status === 'CANCELLED',
       );
@@ -1813,12 +1896,16 @@ export class DeliveryController {
         });
         return state;
       }
+      // Bind the approval to the exact snapshot acceptance evaluates. Recording
+      // a different snapshot silently discards the approval and re-queues the
+      // same decision forever.
+      const acceptedSnapshotId = acceptedContentSnapshotId(state);
       const record: EvidenceRecord = {
         id: `E-${createHash('sha256').update(`${runId}:${decisionId}:${response}`).digest('hex').slice(0, 16)}`,
         run_id: runId,
         task_id: 'ACCEPTANCE',
         acceptance_ids: [decisionId],
-        code_snapshot_id: state.integration_snapshot_id ?? 'NO-INTEGRATION-SNAPSHOT',
+        code_snapshot_id: acceptedSnapshotId ?? NO_ACCEPTED_SNAPSHOT,
         command: 'manual-approval',
         cwd: state.repo_root,
         started_at: new Date().toISOString(),

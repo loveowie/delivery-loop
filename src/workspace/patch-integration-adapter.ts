@@ -39,7 +39,7 @@ export interface PatchExporter {
     integrationWorktree: string,
     patchPath: string,
     approval: { run_id: string },
-    options?: { threeWay?: boolean },
+    options?: { threeWay?: boolean; expectedSha256?: string },
   ): Promise<{ ok: boolean; error?: string }>;
 }
 
@@ -95,7 +95,7 @@ export class PatchIntegrationAdapter implements Integrator {
       integrationWorktree,
       patch.path,
       { run_id: state.run_id },
-      { threeWay: true },
+      { threeWay: true, expectedSha256: patch.sha256 },
     );
     if (!applied.ok) {
       return { ok: false, ...(applied.error === undefined ? {} : { error: applied.error }) };

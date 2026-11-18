@@ -1,3 +1,5 @@
+import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { RunState } from '../domain/types.js';
 import { finalizeRun } from '../finalize/finalizer.js';
 import type {
@@ -10,7 +12,6 @@ import { writeDeliveryReport } from '../reporting/report-writer.js';
 import { EvidenceLedger } from '../state/evidence-ledger.js';
 import type {
   DeliveryRunManagerPort,
-  RuntimeHandle,
   StartRunInput,
 } from '../runtime/types.js';
 
@@ -51,9 +52,18 @@ export interface FinalizeToolInput extends RunActionInput, FinalizeInput {
 
 export type FinalizeExecutor = (
   action: FinalizeAction,
-  handle: RuntimeHandle,
+  /** State `finalizeRun` re-read under the finalization lock. */
+  state: RunState,
   context: FinalizeExecutionContext,
 ) => Promise<FinalizeExecutionResult>;
+
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(resolve(path));
+  } catch {
+    return resolve(path);
+  }
+}
 
 function countTasks(state: RunState): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -176,11 +186,24 @@ export class DeliveryService {
 
   async delivery_finalize(input: FinalizeToolInput) {
     const handle = await this.manager.get(input.run_id, input.repo_root);
+    if (input.repo_root !== undefined) {
+      const [declared, actual] = await Promise.all([
+        canonicalPath(input.repo_root),
+        canonicalPath(handle.state.repo_root),
+      ]);
+      if (declared !== actual) {
+        throw new Error(
+          `repo_root does not match the run repository: ${declared} (run ${input.run_id} lives in ${actual})`,
+        );
+      }
+    }
     return await finalizeRun(
       handle.store,
       input.run_id,
       { mode: input.mode, confirmation: input.confirmation },
-      async (action, _state, context) => this.finalizeExecutor(action, handle, context),
+      // The executor must use the state finalizeRun re-read under its lock,
+      // never the pre-lock handle snapshot.
+      async (action, state, context) => this.finalizeExecutor(action, state, context),
     );
   }
 }

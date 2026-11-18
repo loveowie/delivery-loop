@@ -1,8 +1,27 @@
-import type { EvidenceRecord, TaskGraph } from '../domain/types.js';
+import type { EvidenceRecord, RunState, TaskGraph } from '../domain/types.js';
 
 export interface AcceptanceResult {
   status: 'PASSED' | 'FAILED' | 'WAITING_HUMAN';
   reasons: string[];
+}
+
+/**
+ * Snapshot placeholder used when a run never produced accepted content (for
+ * example a pure approval delivery with no tasks at all).
+ */
+export const NO_ACCEPTED_SNAPSHOT = 'NO-INTEGRATION-SNAPSHOT';
+
+/**
+ * The single source of truth for "the content this run has accepted".
+ *
+ * Acceptance evaluation and manual approval evidence must bind to the same
+ * value: when `respond` recorded a different snapshot than the acceptance
+ * evaluator used, the approval was silently discarded and re-queued forever.
+ * Approval-only deliveries (no integration performed) fall back to the last
+ * task snapshot so their approval still matches.
+ */
+export function acceptedContentSnapshotId(state: RunState): string | undefined {
+  return state.integration_snapshot_id ?? state.graph.tasks.at(-1)?.code_snapshot_id;
 }
 
 export function evaluateAcceptance(

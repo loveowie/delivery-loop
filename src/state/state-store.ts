@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { lstat, link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { RunStateSchema } from '../domain/schemas.js';
 import type { RunState } from '../domain/types.js';
@@ -33,18 +33,31 @@ export async function assertSafePath(root: string, target: string): Promise<void
 }
 
 export async function durableWrite(target: string, content: string, exclusive = false): Promise<void> {
-  const temporary = exclusive ? target : `${target}.${process.pid}.${randomUUID()}.tmp`;
-  const handle = await open(temporary, exclusive ? 'wx' : 'w', 0o600);
+  // The temporary file always lives next to the target so the publish is a
+  // same-filesystem operation. Exclusive creates publish through a hard link:
+  // link() is atomic and refuses to replace an existing name, so a crash
+  // between write and publish leaves no target at all (only a temporary file)
+  // and never a half-written one. Concurrent creators likewise get exactly one
+  // winner; the loser fails with EEXIST.
+  const temporary = exclusive
+    ? join(dirname(target), `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`)
+    : `${target}.${process.pid}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, 'wx', 0o600);
   try {
     await handle.writeFile(content, 'utf8');
     await handle.sync();
   } finally { await handle.close(); }
   try {
-    if (!exclusive) await rename(temporary, target);
+    if (exclusive) {
+      await link(temporary, target);
+      await rm(temporary, { force: true });
+    } else {
+      await rename(temporary, target);
+    }
     const directory = await open(dirname(target), 'r');
     try { await directory.sync(); } finally { await directory.close(); }
   } finally {
-    if (!exclusive) await rm(temporary, { force: true });
+    await rm(temporary, { force: true });
   }
 }
 
@@ -127,27 +140,53 @@ export class StateStore {
     }
   }
 
+  /**
+   * List every readable run. Corruption is isolated per directory: one bad
+   * `run.json` must never starve the repository queue for every other run.
+   * Reading a single run (`readRun`) stays strict.
+   */
   async listRuns(): Promise<RunState[]> {
+    return (await this.listRunsWithDiagnostics()).runs;
+  }
+
+  /** Same as `listRuns`, plus the corrupt entries that were isolated. */
+  async listRunsWithDiagnostics(): Promise<{
+    runs: RunState[];
+    corrupt: Array<{ run_id: string; error: string }>;
+  }> {
     const { readdir } = await import('node:fs/promises');
     const root = join(this.repoRoot, '.delivery', 'runs');
     let entries;
     try {
       entries = await readdir(root, { withFileTypes: true });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { runs: [], corrupt: [] };
       throw error;
     }
     const states: RunState[] = [];
+    const corrupt: Array<{ run_id: string; error: string }> = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) {
         continue;
       }
-      const state = await this.readRun(entry.name);
-      if (state !== undefined) {
-        states.push(state);
+      try {
+        const state = await this.readRun(entry.name);
+        if (state !== undefined) {
+          states.push(state);
+        }
+      } catch (error) {
+        corrupt.push({
+          run_id: entry.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
-    return states.sort((left, right) => left.created_at.localeCompare(right.created_at));
+    states.sort(
+      (left, right) =>
+        left.created_at.localeCompare(right.created_at) || left.run_id.localeCompare(right.run_id),
+    );
+    corrupt.sort((left, right) => left.run_id.localeCompare(right.run_id));
+    return { runs: states, corrupt };
   }
 
   async updateRun(

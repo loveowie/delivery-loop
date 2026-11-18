@@ -26,11 +26,25 @@ export interface DshAgent {
   readonly id: string;
   readonly session?: { readonly header?: { readonly cwd?: string } };
   readonly ctx?: {
+    /** Cordis fiber; a disposed Agent's fiber uid is null. */
+    readonly fiber?: { readonly uid?: string | null };
     on?: (
       event: string,
       listener: (session: { readonly id: string }, event: { readonly type: string; readonly data?: unknown }) => void,
     ) => () => void;
   };
+}
+
+/**
+ * Whether an Agent can still own new effects. A disposed Cordis fiber has a
+ * null uid; creating a subagent below it throws "cannot create effect on
+ * inactive context". Agents without an exposed fiber are assumed live so
+ * lightweight test doubles stay usable.
+ */
+export function agentIsLive(agent: DshAgent | undefined): agent is DshAgent {
+  if (agent === undefined) return false;
+  const fiber = agent.ctx?.fiber;
+  return fiber === undefined ? true : fiber.uid !== null;
 }
 
 export interface DshSubagentResult {
@@ -174,8 +188,15 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
 
   private async parentFor(runId: string): Promise<DshAgent | undefined> {
     const live = this.options.resolveParent(runId);
-    if (live !== undefined && this.options.host.agents.get(live.id) === live) return live;
-    return await this.options.fallbackParent?.();
+    if (agentIsLive(live) && this.options.host.agents.get(live.id) === live) return live;
+    const fallback = await this.options.fallbackParent?.();
+    if (
+      agentIsLive(fallback) &&
+      this.options.host.agents.get(fallback.id) === fallback
+    ) {
+      return fallback;
+    }
+    return undefined;
   }
 
   async run(request: AgentRequest, runOptions: WorkerRunOptions = {}): Promise<AgentResult> {
@@ -202,6 +223,15 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
       controller.abort(new Error(`worker timed out after ${request.timeout_seconds}s`));
     }, timeoutMs);
     if (typeof timer.unref === 'function') timer.unref();
+    // Abort alone does not stop a provider that ignores the signal, so the
+    // result is raced against abort to keep `run()` bounded.
+    const aborted = new Promise<'aborted'>((resolveAborted) => {
+      if (controller.signal.aborted) {
+        resolveAborted('aborted');
+        return;
+      }
+      controller.signal.addEventListener('abort', () => resolveAborted('aborted'), { once: true });
+    });
 
     const childId = randomUUID();
     let measuredTokens = 0;
@@ -224,8 +254,10 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
     // the live child Agent's scoped context after start.
     let stopUsage: (() => void) | undefined = this.options.host.onSessionEvent?.(onUsage);
 
+    let activation: DshActivation | undefined;
+
     try {
-      const activation = await this.options.host.subagents.startActivation({
+      activation = await this.options.host.subagents.startActivation({
         provider: providerName,
         childId,
         label: `${request.role}: ${request.task_id}`,
@@ -241,7 +273,30 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
         const child = this.options.host.agents.get(activation.childId);
         stopUsage = child?.ctx?.on?.('session/event', onUsage);
       }
-      const result = await activation.result;
+      const outcome = await Promise.race([
+        activation.result.then(
+          (value) => ({ kind: 'result' as const, value }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        ),
+        aborted.then(() => ({ kind: 'aborted' as const })),
+      ]);
+      if (outcome.kind === 'aborted') {
+        return failedResult(
+          request,
+          timedOut
+            ? `DSH worker timed out after ${request.timeout_seconds}s`
+            : 'DSH worker aborted',
+          usageMeasured ? measuredTokens : undefined,
+        );
+      }
+      if (outcome.kind === 'error') {
+        return failedResult(
+          request,
+          outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+          usageMeasured ? measuredTokens : undefined,
+        );
+      }
+      const result = outcome.value;
       if (controller.signal.aborted) {
         return failedResult(
           request,
@@ -296,6 +351,15 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
       stopUsage?.();
       clearTimeout(timer);
       callerSignal?.removeEventListener('abort', forwardAbort);
+      // Always release the activation, including after a timeout or abort, and
+      // never let a failing dispose replace the worker's result.
+      if (activation !== undefined) {
+        try {
+          await activation.dispose();
+        } catch {
+          // best effort cleanup
+        }
+      }
     }
   }
 }
