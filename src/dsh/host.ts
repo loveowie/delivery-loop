@@ -284,22 +284,39 @@ function registerWebApi(ctx: any, options: {
   }
   const { config, view, service, token } = options;
   const prefix = config.apiPrefix;
-  if (typeof webServer.tapIndex !== 'function') {
-    // Never expose run control and file reads without the page token. On a
-    // carrier that cannot inject the token the view is unavailable, but the
-    // native tools keep working.
-    console.warn(
-      '[delivery-loop] webServer.tapIndex is unavailable; refusing to expose an unauthenticated view API.',
-    );
-    return;
+  // The token must reach the page before the client bundle runs. A structured
+  // `webserver/index-inject` row does that for both carriers: the Web server
+  // renders it into index.html, and the Desktop app receives the same table in
+  // its boot payload. `tapIndex` alone never runs on the Desktop, which loads
+  // the built client from that payload instead of an HTTP index response.
+  const canInjectRow = typeof ctx.on === 'function'
+    && typeof webServer.collectIndexInjections === 'function';
+  if (canInjectRow) {
+    ctx.effect(() => ctx.on('webserver/index-inject', (table: unknown[]) => {
+      table.push({ kind: 'global', name: '__DELIVERY_LOOP_TOKEN__', value: token });
+    }), 'delivery-loop: view token');
+  } else if (typeof webServer.tapIndex === 'function') {
+    ctx.effect(() => webServer.tapIndex((html: string) => html.replace(
+      '</head>',
+      `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
+    )), 'delivery-loop: view token');
+  } else {
+    // The API below still requires either the DSH browser session or the
+    // token, so registering it without an injection path cannot expose data.
+    console.warn('[delivery-loop] no view-token injection path; the token fallback is unavailable.');
   }
-  ctx.effect(() => webServer.tapIndex((html: string) => html.replace(
-    '</head>',
-    `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
-  )), 'delivery-loop: view token');
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.headers['x-delivery-loop-token'] !== token) {
-      json(res, 401, { error: 'unauthorized' });
+    // DSH's browser session is the primary credential: the Web page sends its
+    // cookie, and the Desktop app forwards the same Host cookie on every plugin
+    // request. The per-process token remains the fallback for a composition
+    // that mounts the web carrier without `ctx.connection`.
+    const connection = ctx.get?.('connection');
+    const rejection = connection !== undefined && connection !== null
+      && typeof connection.requestRejection === 'function'
+      ? connection.requestRejection(req) as 401 | 403 | undefined
+      : (req.headers['x-delivery-loop-token'] === token ? undefined : 401);
+    if (rejection !== undefined) {
+      json(res, rejection, { error: rejection === 403 ? 'forbidden' : 'unauthorized' });
       return;
     }
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -429,6 +446,10 @@ export function apply(ctx: any, rawConfig: unknown): void {
   let coordinatorHandle: { dispose(): Promise<void> } | undefined;
   let coordinator: DshAgent | undefined;
   const fallbackParent = async (): Promise<DshAgent | undefined> => {
+    // Prefer a live, tool-owning Agent. The initiating Agent is normally
+    // remembered by every delivery tool call, so this path is only for a run
+    // recovered without one. A freshly created coordinator is the last resort:
+    // it has a fresh context but may inherit a minimal tool set.
     const live = agents?.list?.()[0] as DshAgent | undefined;
     if (live !== undefined) return live;
     if (coordinator !== undefined && agents?.get?.(coordinator.id) === coordinator) return coordinator;
@@ -726,6 +747,17 @@ export function apply(ctx: any, rawConfig: unknown): void {
   ];
 
   for (const definition of tools) {
+    const execute = definition.execute;
+    // A Host restart or plugin reload drops the in-memory run -> initiating
+    // Agent map. Any later delivery_* call addresses a run from a live Agent
+    // that owns tools, so record that Agent as the run's parent before the
+    // action. Without this, recovered workers fall back to an arbitrary Agent
+    // (or a tool-less coordinator) and cannot edit files.
+    definition.execute = async (args, exec) => {
+      const runId = typeof args.run_id === 'string' && args.run_id.length > 0 ? args.run_id : undefined;
+      if (runId !== undefined && exec.agent !== undefined) rememberParent(runId, exec.agent);
+      return await execute(args, exec);
+    };
     ctx.tools.register(definition);
   }
   registerWebApi(ctx, { config, view, service, token: viewToken });

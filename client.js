@@ -1,4 +1,4 @@
-/* Delivery Loop client: run dock, full delivery view, and settings page. */
+/* Delivery Loop client: sidebar board, run dock, and full delivery view. */
 window.__ModuleLoader__.load({
   id: 'delivery-loop',
   factory(require) {
@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
     const { useEffect, useMemo, useRef, useState } = React;
 
     const NS = 'delivery-loop';
+    const PANEL_ID = 'delivery-loop';
     const API = '/delivery-loop/api';
     const TOKEN = typeof window !== 'undefined' && typeof window.__DELIVERY_LOOP_TOKEN__ === 'string'
       ? window.__DELIVERY_LOOP_TOKEN__
@@ -17,12 +18,33 @@ window.__ModuleLoader__.load({
       'delivery_respond', 'delivery_pause', 'delivery_resume', 'delivery_cancel',
       'delivery_export_report', 'delivery_finalize',
     ];
+    // Kanban columns, left to right. Every known run status belongs to exactly
+    // one column; unknown statuses fall back to the active column.
+    const BOARD_COLUMNS = [
+      { key: 'active', label: 'board.active', statuses: ['DRAFT', 'SPEC_READY', 'QUEUED', 'PLANNING', 'RUNNING', 'VERIFYING'] },
+      { key: 'waiting', label: 'board.waiting', statuses: ['WAITING_HUMAN'] },
+      { key: 'paused', label: 'board.paused', statuses: ['PAUSED', 'BLOCKED'] },
+      { key: 'done', label: 'board.done', statuses: ['COMPLETED'] },
+      { key: 'ended', label: 'board.ended', statuses: ['CANCELLED'] },
+    ];
 
     const zh = {
       nav: '交付循环',
-      'settings.title': '交付循环',
-      'settings.subtitle': '查看已批准的端到端交付运行：任务图、每次决策、变更文件与验收证据。',
-      'settings.empty': '还没有交付运行。使用 deliver-change 技能准备并启动一个运行。',
+      'board.title': '交付循环',
+      'board.subtitle': '按状态查看所有已批准的端到端交付运行；点击卡片查看任务图、每次决策、变更文件与验收证据。',
+      'board.empty': '还没有交付运行。在会话中让 Agent 使用 deliver-change 技能准备并启动一个运行。',
+      'board.refresh': '刷新',
+      'board.open': '打开详情',
+      'board.total': '运行总数',
+      'board.active': '进行中',
+      'board.waiting': '等待人工',
+      'board.paused': '已暂停 / 阻塞',
+      'board.done': '已完成',
+      'board.ended': '已取消',
+      'board.noCards': '此列暂无运行',
+      'board.pendingBadge': '待决策',
+      'board.currentTasks': '当前任务',
+      'board.unauthorized': '未授权：DSH 页面会话未通过校验。请刷新页面；若仍失败，请重启 DSH 应用后重试。',
       'dock.open': '打开交付视图',
       'dock.noRun': '暂无运行',
       'overview': '概览',
@@ -83,12 +105,11 @@ window.__ModuleLoader__.load({
       'systemEvents': '系统事件',
       'taskCounts': '任务分布',
       'noSelection': '未选择',
-      'openFromSettings': '查看',
       'runList': '运行列表',
       'error.LoadFailed': '加载失败',
       'error.ActionFailed': '操作失败',
       'acceptanceRejectHint': '拒绝只会记录这次人工决策；运行仍会等待验收通过。',
-      'tool.notIndexed': '运行尚未出现在索引中，请从设置页刷新。',
+      'tool.notIndexed': '运行尚未出现在索引中，请在交付循环看板中刷新。',
       'status.DRAFT': '草稿',
       'status.SPEC_READY': '规格就绪',
       'status.QUEUED': '排队中',
@@ -114,9 +135,21 @@ window.__ModuleLoader__.load({
 
     const en = {
       nav: 'Delivery loop',
-      'settings.title': 'Delivery loop',
-      'settings.subtitle': 'Inspect approved end-to-end delivery runs: task graph, every decision, changed files, and acceptance evidence.',
-      'settings.empty': 'No delivery runs yet. Prepare and start one with the deliver-change skill.',
+      'board.title': 'Delivery loop',
+      'board.subtitle': 'Browse every approved end-to-end delivery run by status. Open a card for its task graph, decisions, changed files, and acceptance evidence.',
+      'board.empty': 'No delivery runs yet. Ask the agent to prepare and start one with the deliver-change skill.',
+      'board.refresh': 'Refresh',
+      'board.open': 'Open',
+      'board.total': 'Runs',
+      'board.active': 'Active',
+      'board.waiting': 'Waiting for human',
+      'board.paused': 'Paused / blocked',
+      'board.done': 'Completed',
+      'board.ended': 'Cancelled',
+      'board.noCards': 'No runs in this column',
+      'board.pendingBadge': 'Decision needed',
+      'board.currentTasks': 'Current tasks',
+      'board.unauthorized': 'Unauthorized: the DSH page session was not accepted. Refresh the page; if it still fails, restart DSH and try again.',
       'dock.open': 'Open delivery view',
       'dock.noRun': 'No run',
       'overview': 'Overview',
@@ -177,12 +210,11 @@ window.__ModuleLoader__.load({
       'systemEvents': 'System events',
       'taskCounts': 'Task distribution',
       'noSelection': 'None selected',
-      'openFromSettings': 'Open',
       'runList': 'Runs',
       'error.LoadFailed': 'Failed to load',
       'error.ActionFailed': 'Action failed',
       'acceptanceRejectHint': 'Rejecting records this decision only; the run still waits for acceptance.',
-      'tool.notIndexed': 'This run is not indexed yet; refresh from Settings.',
+      'tool.notIndexed': 'This run is not indexed yet; refresh the Delivery loop board.',
       'status.DRAFT': 'Draft',
       'status.SPEC_READY': 'Spec ready',
       'status.QUEUED': 'Queued',
@@ -898,43 +930,126 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dl-dock-open' }, '›')));
     }
 
-    function RunRow({ run, onOpen }) {
-      const t = useT();
-      return h('div', { className: 'dl-run-row' },
-        h('div', { className: 'dl-run-main' },
-          h('div', { className: 'dl-run-title' }, run.title || run.run_id),
-          h('div', { className: 'dl-run-sub' },
-            h('span', { className: 'dl-mono' }, run.run_id),
-            h('span', { className: 'dl-sep' }, '·'),
-            h('span', { className: 'dl-mono dl-muted', title: run.repo_root }, shortPath(run.repo_root, 70)),
-            h('span', { className: 'dl-sep' }, '·'),
-            h('span', null, t('updated') + ' ' + fmtTime(run.updated_at)))),
-        h('div', { className: 'dl-run-side' },
-          h(StatusPill, { status: run.status, size: 'small' }),
-          h('span', { className: 'dl-run-progress' }, `${run.done_tasks}/${run.total_tasks}`),
-          h(Button, { onClick: () => onOpen(run) }, t('openFromSettings'))));
+    function BoardIcon({ size = 16 }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      },
+        h('rect', { x: 3, y: 4, width: 5, height: 16, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.5 }),
+        h('rect', { x: 9.5, y: 4, width: 5, height: 11, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.5 }),
+        h('rect', { x: 16, y: 4, width: 5, height: 7, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.5 }));
     }
 
-    function DeliverySettings() {
+    function boardColumnKey(status) {
+      const column = BOARD_COLUMNS.find((candidate) => candidate.statuses.includes(status));
+      return column === undefined ? 'active' : column.key;
+    }
+
+    function boardMetric(label, value, tone) {
+      return h('div', { className: 'dl-board-metric' },
+        h('span', { className: 'dl-board-metric-label' }, label),
+        h('span', { className: 'dl-board-metric-value', style: tone === undefined ? undefined : { color: tone } }, value));
+    }
+
+    function BoardCard({ run, onOpen }) {
       const t = useT();
-      const { runs, error, loading, reload } = useRuns(undefined, 8000);
+      const pending = Array.isArray(run.pending_decision_ids) ? run.pending_decision_ids.length : 0;
+      const current = Array.isArray(run.current_task_ids) ? run.current_task_ids : [];
+      const activate = () => onOpen(run);
+      return h('div', {
+        className: cx('dl-card', pending > 0 && 'dl-card-pending'),
+        role: 'button',
+        tabIndex: 0,
+        title: t('board.open'),
+        onClick: activate,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            activate();
+          }
+        },
+      },
+        h('div', { className: 'dl-card-top' },
+          h(StatusPill, { status: run.status, size: 'small' }),
+          h('span', { className: 'dl-card-time', title: run.updated_at }, fmtTime(run.updated_at))),
+        h('div', { className: 'dl-card-title' }, run.title || run.run_id),
+        h('div', { className: 'dl-card-repo dl-mono', title: run.repo_root }, shortPath(run.repo_root, 64)),
+        h(Progress, { done: run.done_tasks ?? 0, total: run.total_tasks ?? 0 }),
+        pending > 0
+          ? h('span', { className: 'dl-card-badge' }, `${t('board.pendingBadge')} · ${pending}`)
+          : null,
+        current.length > 0
+          ? h('div', { className: 'dl-card-tasks' },
+            h('span', { className: 'dl-card-label' }, t('board.currentTasks')),
+            ...current.map((id) => h('span', { key: id, className: 'dl-chip dl-mono' }, id)))
+          : null,
+        run.last_error
+          ? h('div', { className: 'dl-card-error', title: run.last_error }, run.last_error)
+          : null,
+        h('div', { className: 'dl-card-foot' },
+          h('span', { className: 'dl-card-tokens' },
+            `${t('tokens')} ${(run.total_tokens_used ?? 0).toLocaleString()}`),
+          h('span', { className: 'dl-card-open' }, `${t('board.open')} ›`)));
+    }
+
+    function BoardColumn({ column, runs, onOpen }) {
+      const t = useT();
+      return h('section', { className: 'dl-board-column', 'data-column': column.key },
+        h('div', { className: 'dl-board-column-head' },
+          h('span', { className: 'dl-board-column-title' }, t(column.label)),
+          h('span', { className: 'dl-board-column-count' }, String(runs.length))),
+        h('div', { className: 'dl-board-column-body' },
+          runs.length === 0 ? h('div', { className: 'dl-board-column-empty' }, t('board.noCards')) : null,
+          ...runs.map((run) => h(BoardCard, { key: run.run_id, run, onOpen }))));
+    }
+
+    function DeliveryBoard() {
+      const t = useT();
+      const { runs, error, loading, reload } = useRuns(undefined, 5000);
+      const sorted = useMemo(() => runs.slice().sort((left, right) => {
+        const leftTime = Date.parse(left.updated_at ?? '') || 0;
+        const rightTime = Date.parse(right.updated_at ?? '') || 0;
+        return rightTime - leftTime;
+      }), [runs]);
+      const grouped = useMemo(() => {
+        const next = Object.fromEntries(BOARD_COLUMNS.map((column) => [column.key, []]));
+        for (const run of sorted) next[boardColumnKey(run.status)].push(run);
+        return next;
+      }, [sorted]);
+      const active = BOARD_COLUMNS[0].statuses.reduce((count, status) =>
+        count + sorted.filter((run) => run.status === status).length, 0);
+      const waiting = sorted.filter((run) => run.status === 'WAITING_HUMAN').length;
+      const pending = sorted.reduce((count, run) =>
+        count + (Array.isArray(run.pending_decision_ids) ? run.pending_decision_ids.length : 0), 0);
+      const unauthorized = typeof error === 'string' && error.toLowerCase().includes('unauthorized');
+      const open = (run) => openDelivery({ repoRoot: run.repo_root, runId: run.run_id });
       return h(React.Fragment, null,
         h(Styles),
-        h('div', { className: 'dl-settings' },
-          h('div', { className: 'dl-settings-head' },
-            h('div', null,
-              h('div', { className: 'dl-settings-title' }, t('settings.title')),
-              h('div', { className: 'dl-settings-sub' }, t('settings.subtitle'))),
-            h(Button, { onClick: () => void reload() }, t('refresh'))),
-          error ? h(ErrorBanner, { error }) : null,
-          loading ? h(Empty, null, t('loading')) : null,
-          !loading && runs.length === 0 ? h(Empty, null, t('settings.empty')) : null,
-          h('div', { className: 'dl-run-list' },
-            ...runs.map((run) => h(RunRow, {
-              key: run.run_id,
-              run,
-              onOpen: (selected) => openDelivery({ repoRoot: selected.repo_root, runId: selected.run_id }),
-            })))));
+        h('div', { className: 'dl-board' },
+          h('div', { className: 'dl-board-head' },
+            h('div', { className: 'dl-board-head-main' },
+              h('div', { className: 'dl-board-title' }, t('board.title')),
+              h('div', { className: 'dl-board-sub' }, t('board.subtitle'))),
+            h('div', { className: 'dl-board-actions' },
+              h(Button, { onClick: () => void reload(), disabled: loading }, t('board.refresh')))),
+          h('div', { className: 'dl-board-metrics' },
+            boardMetric(t('board.total'), String(sorted.length)),
+            boardMetric(t('board.active'), String(active), 'var(--dsw-alias-brand-primary)'),
+            boardMetric(t('board.waiting'), String(waiting), waiting > 0 ? 'var(--dsw-alias-state-warn-primary)' : undefined),
+            boardMetric(t('pending'), String(pending), pending > 0 ? 'var(--dsw-alias-state-warn-primary)' : undefined)),
+          loading && sorted.length === 0 ? h(Empty, null, t('loading')) : null,
+          !loading && sorted.length === 0 ? h(Empty, null, t('board.empty')) : null,
+          unauthorized ? h('div', { className: 'dl-banner dl-banner-error' }, t('board.unauthorized'), ' ', error) : null,
+          !unauthorized && error ? h(ErrorBanner, { error }) : null,
+          sorted.length > 0
+            ? h('div', { className: 'dl-kanban' },
+              ...BOARD_COLUMNS.map((column) =>
+                h(BoardColumn, { key: column.key, column, runs: grouped[column.key], onOpen: open })))
+            : null));
     }
 
     function DeliveryToolCard({ toolName, block, sessionId, useSessions }) {
@@ -1004,13 +1119,23 @@ window.__ModuleLoader__.load({
           label: () => bridge.t('nav'),
         }, DeliveryOverlay);
       });
-      ctx.slots.inject('settings.section', function* () {
+      // The delivery board is a first-class application panel: a row in the
+      // left sidebar's global panel list, and the page it opens in the main
+      // column. The row order keeps it below Plugins and Automation tasks and
+      // above the sidebar's More menu.
+      ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+        name: 'sidebar.panellist',
+        id: PANEL_ID,
+        order: 20,
+        locale: NS,
+        label: () => bridge.t('nav'),
+      }, BoardIcon));
+      ctx.slots.inject('main', function* () {
         yield ctx.slots.register({
-          name: 'settings.section',
-          id: 'delivery-loop',
-          order: 45,
-          label: () => bridge.t('nav'),
-        }, DeliverySettings);
+          name: 'main',
+          key: PANEL_ID,
+          locale: NS,
+        }, DeliveryBoard);
       });
       ctx.slots.inject('tool.call.toolview', function* () {
         for (const key of TOOL_NAMES) {
@@ -1133,17 +1258,41 @@ window.__ModuleLoader__.load({
       .dl-dock-progress{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dsw-alias-label-secondary);white-space:nowrap}
       .dl-dock-badge{color:var(--dsw-alias-state-warn-primary);font-weight:600;white-space:nowrap}
       .dl-dock-open{color:var(--dsw-alias-label-secondary);font-size:15px;line-height:1}
-      .dl-settings{max-width:960px;margin:0 auto;padding:24px 28px 48px;display:flex;flex-direction:column;gap:18px;color:var(--dsw-alias-label-primary)}
-      .dl-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
-      .dl-settings-title{font-size:20px;font-weight:600}
-      .dl-settings-sub{font-size:13px;color:var(--dsw-alias-label-secondary);margin-top:4px;max-width:640px}
-      .dl-run-list{display:flex;flex-direction:column;gap:8px}
-      .dl-run-row{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}
-      .dl-run-main{flex:1;min-width:0}
-      .dl-run-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .dl-run-sub{display:flex;gap:6px;align-items:center;color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:2px;min-width:0;flex-wrap:wrap}
-      .dl-run-side{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-      .dl-run-progress{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+      .dl-board{display:flex;flex-direction:column;gap:16px;max-width:1440px;min-height:100%;margin:0 auto;padding:24px 28px 40px;box-sizing:border-box;color:var(--dsw-alias-label-primary)}
+      .dl-board-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+      .dl-board-head-main{min-width:0}
+      .dl-board-title{font-size:20px;font-weight:600;line-height:1.3}
+      .dl-board-sub{font-size:13px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin-top:4px;max-width:760px}
+      .dl-board-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+      .dl-board-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+      .dl-board-metric{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}
+      .dl-board-metric-label{font-size:11px;color:var(--dsw-alias-label-secondary);text-transform:uppercase;letter-spacing:.04em}
+      .dl-board-metric-value{font-size:20px;font-weight:600;line-height:1.2}
+      .dl-kanban{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;align-items:start;overflow-x:auto;padding-bottom:6px}
+      .dl-board-column{display:flex;flex-direction:column;gap:8px;min-width:0}
+      .dl-board-column-head{display:flex;align-items:center;gap:8px;padding:2px 4px}
+      .dl-board-column-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--dsw-alias-label-secondary)}
+      .dl-board-column-count{font-size:11px;color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:0 6px;min-width:18px;text-align:center}
+      .dl-board-column-body{display:flex;flex-direction:column;gap:8px;min-height:84px;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+      .dl-board-column-empty{padding:20px 8px;text-align:center;font-size:12px;color:var(--dsw-alias-label-secondary)}
+      .dl-card{display:flex;flex-direction:column;gap:7px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;transition:border-color .15s ease,box-shadow .15s ease}
+      .dl-card:hover{border-color:var(--dsw-alias-border-l2);box-shadow:0 2px 10px rgba(0,0,0,.06)}
+      .dl-card:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+      .dl-card-pending{border-color:var(--dsw-alias-state-warn-primary)}
+      .dl-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+      .dl-card-time{font-size:10.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
+      .dl-card-title{font-size:13px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+      .dl-card-repo{color:var(--dsw-alias-label-secondary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .dl-card-badge{align-self:flex-start;font-size:11px;font-weight:600;color:var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-2);border-radius:6px;padding:1px 7px}
+      .dl-card-tasks{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+      .dl-card-label{font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+      .dl-card-error{font-size:11px;color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-bg-layer-2);border-radius:6px;padding:4px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .dl-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid var(--dsw-alias-border-l1);font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+      .dl-card-tokens{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+      .dl-card-open{color:var(--dsw-alias-brand-primary);white-space:nowrap}
+      .dl-card .dl-progress{gap:6px}
+      .dl-card .dl-progress-label{font-size:10.5px}
+      .dl-card .dl-progress-track{height:6px}
       .dl-tool-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:9px 11px;font-size:12px;display:flex;flex-direction:column;gap:6px}
       .dl-tool-card-error{border-color:var(--dsw-alias-state-error-primary)}
       .dl-tool-head{display:flex;align-items:center;gap:8px}
@@ -1159,6 +1308,9 @@ window.__ModuleLoader__.load({
         .dl-panel{width:calc(100vw - 16px);height:calc(100vh - 16px)}
         .dl-backdrop{padding:8px}
         .dl-title{max-width:320px}
+        .dl-board{padding:16px 14px 32px}
+        .dl-board-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .dl-kanban{grid-auto-columns:minmax(220px,1fr)}
       }
     `;
 

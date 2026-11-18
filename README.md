@@ -14,7 +14,7 @@ The plugin runs entirely inside DSH:
 ## What it provides
 
 - `deliver-change` Skill for intake, one-time approval and status reporting.
-- Native `delivery_*` tools, a token-guarded HTTP view API, and a Web delivery view.
+- Native `delivery_*` tools, an HTTP view API authenticated by the DSH browser session, and a Web delivery board.
 - Deterministic scheduler, task state machine, retry limits and failure fingerprints.
 - Fresh-context DSH subagent workers for implementation, debugging, review and acceptance.
 - Vendored and hash-locked generic Skills; no OpenSpec or domain Skill is required by default.
@@ -33,14 +33,14 @@ Delivery Loop separates **deciding** from **doing**. The Host controller owns th
 ```mermaid
 flowchart TB
   agent["DSH Agent session"]
-  web["DSH Web page · client.js<br/>composer strip · delivery view · settings"]
+  web["DSH Web page · client.js<br/>sidebar board · composer strip · delivery view"]
 
   subgraph host["DSH Host plugin · dist/dsh/host.js"]
     t["deliver-change Skill · system prompt ·<br/>10 native delivery_* tools"]
     s1["DeliveryService<br/>start / status / respond / control / finalize"]
     s3["DeliveryRunManager<br/>queue · in-process loop · recovery"]
     s4["DeliveryController<br/>tick · task lifecycle · evidence · acceptance"]
-    h3["View API · per-process token"]
+    h3["View API · DSH browser session"]
     s2["DeliveryViewService<br/>runs · detail · files · diff"]
   end
 
@@ -146,7 +146,7 @@ In DSH, install this directory as a local bundle:
 
 The bundle inserts the `delivery-loop` row from `cordis.patch.yml`. Its Host half is `dist/dsh/host.js`; its browser half is `client.js`.
 
-After installing or changing `client.js`, refresh the DSH page. The Host injects a per-process view token into the page and the browser half sends it with every view request; a view that shows `401` is running old page code, so refresh it.
+After installing or changing `client.js`, refresh the DSH page. The view API authenticates the browser session through DSH's Connection service; the Desktop app forwards its Host cookie on every plugin request. A composition without Connection falls back to a per-process token injected into the page. A view that shows `401` is running old page code or lacks the session cookie, so refresh it.
 
 ## Bundle configuration
 
@@ -178,11 +178,11 @@ The DSH bundle adds a view over the durable run state:
   - changed-file preview and diff, with worktree/repository switching;
   - run artifacts (`spec.md`, `task-graph.json`, `reports/final.md`, `completion.json`, `delivery.patch`, evidence logs);
   - the raw event stream;
-- **Settings → 交付循环 / Delivery loop** lists every registered run across repositories.
+- **Left sidebar → 交付循环 / Delivery loop** opens the delivery board, which lists every registered run across repositories by status.
 
-The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If the web carrier cannot inject the view token, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
+The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If neither the DSH browser session nor a token injection mechanism is available, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
 
-The view API is same-origin and guarded by a per-process token injected into the DSH page. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs.
+The view API is same-origin and guarded by the DSH browser session, with a per-process token fallback. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs.
 
 ## Use
 
@@ -235,7 +235,7 @@ Without starting a real delivery:
 npm run demo:view
 ```
 
-It creates a synthetic completed run in its own temporary Git repository and registers it under **Settings → 交付循环 / Delivery loop**. Delete the printed repository directory and its `~/.delivery-loop/runs.json` entry when done.
+It creates a synthetic completed run in its own temporary Git repository and registers it under the **交付循环 / Delivery loop** board in the left sidebar. Delete the printed repository directory and its `~/.delivery-loop/runs.json` entry when done.
 
 ## Runtime and state
 

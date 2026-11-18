@@ -14,7 +14,7 @@ Delivery Loop 是一个原生的 **DeepSeek Harness（DSH）** 插件，用于�
 ## 提供的能力
 
 - `deliver-change` Skill：负责需求受理、一次性批准与状态汇报。
-- 原生 `delivery_*` 工具、带令牌校验的 HTTP 视图 API，以及 Web 交付视图。
+- 原生 `delivery_*` 工具、由 DSH 浏览器会话鉴权的 HTTP 视图 API，以及 Web 交付看板。
 - 确定性调度器、任务状态机、重试上限与失败指纹。
 - 用于实现、调试、评审与验收的全新上下文 DSH 子代理 Worker。
 - 内置并做哈希锁定的通用 Skill；默认不依赖 OpenSpec 或任何业务领域 Skill。
@@ -33,14 +33,14 @@ Delivery Loop 把**决策**与**执行**分开。Host 控制器负责计划、�
 ```mermaid
 flowchart TB
   agent["DSH Agent 会话"]
-  web["DSH Web 页面 · client.js<br/>会话状态条 · 交付视图 · 设置页"]
+  web["DSH Web 页面 · client.js<br/>侧边栏看板 · 会话状态条 · 交付视图"]
 
   subgraph host["DSH Host 插件 · dist/dsh/host.js"]
     t["deliver-change Skill · 系统提示<br/>10 个原生 delivery_* 工具"]
     s1["DeliveryService<br/>启动 / 状态 / 应答 / 控制 / 定稿"]
     s3["DeliveryRunManager<br/>队列 · 进程内循环 · 恢复"]
     s4["DeliveryController<br/>tick · 任务生命周期 · 证据 · 验收"]
-    h3["视图 API · 按进程令牌校验"]
+    h3["视图 API · DSH 浏览器会话鉴权"]
     s2["DeliveryViewService<br/>运行列表 · 详情 · 文件 · diff"]
   end
 
@@ -146,7 +146,7 @@ npm run build
 
 该 bundle 会从 `cordis.patch.yml` 插入 `delivery-loop` 行。它的 Host 部分是 `dist/dsh/host.js`，浏览器部分是 `client.js`。
 
-安装或修改 `client.js` 后请刷新 DSH 页面。Host 会向页面注入按进程生成的视图令牌，浏览器端会在每次视图请求中携带它；如果视图返回 `401`，说明页面仍在运行旧的客户端代码，刷新即可。
+安装或修改 `client.js` 后请刷新 DSH 页面。视图 API 通过 DSH 的 Connection 服务校验浏览器会话；Desktop 应用会在每次插件请求中转发 Host Cookie。没有 Connection 的组合会回退到注入页面的按进程令牌。如果视图返回 `401`，说明页面仍在运行旧的客户端代码或缺少会话 Cookie，刷新即可。
 
 ## Bundle 配置
 
@@ -178,11 +178,11 @@ DSH bundle 在持久运行状态之上提供了一套视图：
   - 变更文件预览与 diff，支持在 worktree/仓库之间切换；
   - 运行产物（`spec.md`、`task-graph.json`、`reports/final.md`、`completion.json`、`delivery.patch`、证据日志）；
   - 原始事件流；
-- **设置 → 交付循环 / Delivery loop** 列出跨仓库注册的所有运行。
+- **左侧边栏 → 交付循环 / Delivery loop** 打开交付看板，按状态列出跨仓库注册的所有运行。
 
-除暂停、恢复、取消、导出报告、回答待处理的人工决策，以及经模式确认的定稿请求外，视图是只读的。运行数据保存在目标仓库的 `.delivery/` 目录，跨运行索引保存在 `~/.delivery-loop/runs.json`。如果 Web 载体无法注入视图令牌，插件会拒绝注册 HTTP API，而不是暴露一个未鉴权的接口。
+除暂停、恢复、取消、导出报告、回答待处理的人工决策，以及经模式确认的定稿请求外，视图是只读的。运行数据保存在目标仓库的 `.delivery/` 目录，跨运行索引保存在 `~/.delivery-loop/runs.json`。如果 DSH 浏览器会话与令牌注入机制都不可用，插件会拒绝注册 HTTP API，而不是暴露一个未鉴权的接口。
 
-视图 API 为同源访问，并由注入 DSH 页面的按进程令牌保护。它只读取该运行的仓库、其 worktree 以及 `.delivery` 产物，拒绝这些根之外的路径（包括符号链接逃逸），并且绝不会仅仅为了列出运行而创建 `.delivery` 目录。
+视图 API 为同源访问，由 DSH 浏览器会话保护，并以按进程令牌作为回退。它只读取该运行的仓库、其 worktree 以及 `.delivery` 产物，拒绝这些根之外的路径（包括符号链接逃逸），并且绝不会仅仅为了列出运行而创建 `.delivery` 目录。
 
 ## 使用
 
@@ -235,7 +235,7 @@ DSH bundle 在持久运行状态之上提供了一套视图：
 npm run demo:view
 ```
 
-它会在独立的临时 Git 仓库中创建一次合成的已完成运行，并注册到 **设置 → 交付循环 / Delivery loop**。用完后请删除打印出的仓库目录，以及 `~/.delivery-loop/runs.json` 中对应的条目。
+它会在独立的临时 Git 仓库中创建一次合成的已完成运行，并注册到左侧边栏的 **交付循环 / Delivery loop** 看板。用完后请删除打印出的仓库目录，以及 `~/.delivery-loop/runs.json` 中对应的条目。
 
 ## 运行时与状态
 

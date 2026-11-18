@@ -15,7 +15,7 @@ Turn an approved specification into a resumable delivery DAG that runs entirely 
 
 ```text
 DSH Web page
-  ├─ composer strip / full delivery overlay / Settings page   (client.js)
+  ├─ sidebar board / composer strip / full delivery overlay   (client.js)
   └─ delivery_* tools + view API + skill + prompt section     (Host plugin)
         │
         ├─ DeliveryService         start/status/respond/control/finalize
@@ -36,7 +36,7 @@ DSH Web page
 - 10 native tools: `delivery_start`, `delivery_status`, `delivery_inspect`, `delivery_watch`, `delivery_respond`, `delivery_pause`, `delivery_resume`, `delivery_cancel`, `delivery_export_report`, `delivery_finalize`;
 - the `deliver-change` runtime skill;
 - a short system-prompt section;
-- a token-guarded HTTP view API at `apiPrefix`.
+- an HTTP view API at `apiPrefix`, authenticated by the DSH browser session.
 
 The plugin hard-depends on `tools`, `agents`, and `subagents`. It fails activation if the native worker composition is unavailable.
 
@@ -65,16 +65,16 @@ Every meaningful transition appends a `decision` event: baseline, dispatch, work
 
 - `conversation.composer.dock`: live strip with status, progress and pending count.
 - `shell.overlay`: full modal with Overview, Tasks, Decisions, Files, Artifacts and Events.
-- `settings.section`: cross-repository run list.
+- `sidebar.panellist` + `main` (`delivery-loop`): cross-repository delivery board; the panel row opens the board in the main column.
 - `tool.call.toolview` for `delivery_*`: compact run cards.
 
-The client uses only DSH theme tokens and locale dictionaries. It fetches the view API with a per-process token and never reads files outside the run's repository, worktrees, or `.delivery` directory.
+The client uses only DSH theme tokens and locale dictionaries. It fetches the view API under the DSH browser session (with a per-process token fallback) and never reads files outside the run's repository, worktrees, or `.delivery` directory.
 
 ## Security boundaries
 
 - Workers inherit the initiating session's sandbox and approval policy.
 - Reviewer and acceptance workers are instructed to stay read-only; the controller rejects a changed candidate snapshot and revalidates managed worktrees before every snapshot/patch operation.
-- The view API validates relative paths, rejects state-controlled roots and symlink escapes, caps file reads, and fails closed when the token cannot be injected.
+- The view API validates relative paths, rejects state-controlled roots and symlink escapes, caps file reads, and fails closed when neither the browser session nor a token can authenticate the request.
 - Finalization is explicit, defaults to `prepare-only`, binds confirmation to `<run-id>:<mode>`, and disables repository hooks for its commits.
 
 ## Known extensions

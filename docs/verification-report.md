@@ -14,7 +14,7 @@ Environment: macOS, DeepSeek Harness Desktop 0.2.2-rc.3, Node 24.
 | DSH bundle activation | `include:delivery-loop` active |
 | Native tools | all 10 `delivery_*` tools visible |
 | Skill catalog | `deliver-change` listed |
-| Client slots | dock, overlay, settings section and all 10 tool-view keys active |
+| Client slots | sidebar panel row + main board, dock, overlay and all 10 tool-view keys active |
 | View API | health/runs/run/file/diff verified; unauthenticated requests return 401 |
 | Package layout | Host/Client halves, locale, icon, schemas and patch present; legacy paths absent |
 
@@ -40,7 +40,7 @@ The worker used the DSH file/shell tools, followed the task contract, produced `
 
 ## View verification
 
-The run is visible in **Settings → 交付循环** with its title, status, progress, token usage, task, decisions, changed files, artifacts and completion reference. HTTP responses for the same run were checked directly. The browser page's rendered layout, light/dark appearance, focus behavior and narrow-width layout were not visually verified because no browser control was available; refresh the page after installing or upgrading the client.
+The run is visible on the **交付循环** board in the left sidebar, and its detail view shows the title, status, progress, token usage, tasks, decisions, changed files, artifacts and completion reference. HTTP responses for the same run were checked directly. The browser page's rendered layout, light/dark appearance, focus behavior and narrow-width layout were not visually verified because no browser control was available; refresh the page after installing or upgrading the client; the Desktop app delivers the view token through its boot payload, so no HTTP index is required.
 
 ## Not verified
 

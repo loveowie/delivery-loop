@@ -13,7 +13,7 @@ The controller starts immediately in the Host process. A run occupies one reposi
 - `delivery_status` returns progress, current tasks, pending decisions, recent decisions and the last error.
 - `delivery_inspect` returns the full task graph, requirements, acceptance, decision timeline, evidence index, changed files and artifacts.
 - `delivery_watch` waits for progress or a terminal state; use it instead of polling in a tight loop.
-- The DSH view shows the same data: the composer strip, the full overlay, and **Settings → 交付循环**.
+- The DSH view shows the same data: the **交付循环** board in the left sidebar, the composer strip, and the full overlay.
 
 Terminal and waiting states are `COMPLETED`, `CANCELLED`, `BLOCKED`, `PAUSED` and `WAITING_HUMAN`.
 
@@ -64,4 +64,4 @@ Each executing run holds a per-run worker lock. A second Host or plugin activati
 - **Workers can read but not write**: the child inherits the initiating session's sandbox and approval policy. Run the delivery from a session with workspace write permission.
 - **Verification blocks with a container error**: the default backend is fail-closed. Install a digest-pinned image or explicitly set `verification.execution.backend: trusted-host` for a trusted project.
 - **`usage_incomplete: true`**: no assistant-message usage event was observed for a worker. The run remains usable; token budget enforcement is conservative when usage is unknown.
-- **View shows 401**: refresh the DSH page so it receives the current per-process view token.
+- **View shows 401**: refresh the DSH page so it receives the current per-process view token from the index injection (Web) or boot payload (Desktop). If the token is still missing, reload the plugin bundle; a stale client bundle from before the index-injection fix has no token to send.

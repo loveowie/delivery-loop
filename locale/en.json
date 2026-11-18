@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Delivery loop",
-    "description": "Run resumable end-to-end delivery inside DeepSeek Harness: a task graph, isolated workers, verification, independent review, and acceptance. Open the Delivery Loop strip under a session composer, or Settings → Delivery loop to browse every run. The view shows live progress, each decision, task details, changed-file previews, artifacts, and events. Run data stays in the target repository's .delivery/ directory."
+    "description": "Run resumable end-to-end delivery inside DeepSeek Harness: a task graph, isolated workers, verification, independent review, and acceptance. The Delivery loop board in the left sidebar lists every run by status; the session composer strip still opens the active run. The view shows live progress, each decision, task details, changed-file previews, artifacts, and events. Run data stays in the target repository's .delivery/ directory."
   }
 }
