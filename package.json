@@ -41,6 +41,7 @@
     }
   },
   "files": [
+    "assets/icon-*.png",
     "capabilities",
     "client.js",
     "cordis.patch.yml",
@@ -49,6 +50,7 @@
     "icon.svg",
     "locale",
     "schemas",
+    "screenshots.json",
     "scripts",
     "skills",
     "README.md",
