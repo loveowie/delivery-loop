@@ -154,7 +154,7 @@ npm run build
 
 ```yaml
 - id: delivery-loop
-  name: 'delivery-loop'
+  name: 'dsh-delivery-loop'
   config:
     apiPrefix: /delivery-loop     # 视图 API 前缀
     modelInvocableSkill: true     # 注册 deliver-change

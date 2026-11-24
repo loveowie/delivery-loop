@@ -1,6 +1,6 @@
 - insert:
     - id: delivery-loop
-      name: 'delivery-loop'
+      name: 'dsh-delivery-loop'
       config:
         apiPrefix: /delivery-loop
         modelInvocableSkill: true

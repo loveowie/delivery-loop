@@ -150,7 +150,7 @@ The bundle's loader row accepts:
 
 ```yaml
 - id: delivery-loop
-  name: 'delivery-loop'
+  name: 'dsh-delivery-loop'
   config:
     apiPrefix: /delivery-loop
     defaultRepoRoot: /optional/fallback/repository

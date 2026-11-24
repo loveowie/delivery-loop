@@ -154,7 +154,7 @@ The loader row accepts:
 
 ```yaml
 - id: delivery-loop
-  name: 'delivery-loop'
+  name: 'dsh-delivery-loop'
   config:
     apiPrefix: /delivery-loop     # view API prefix
     modelInvocableSkill: true     # register deliver-change
