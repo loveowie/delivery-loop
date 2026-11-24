@@ -1,273 +1,243 @@
 # Delivery Loop
 
-English | [简体中文](readme-cn.md)
+[![npm version](https://img.shields.io/npm/v/dsh-delivery-loop.svg)](https://www.npmjs.com/package/dsh-delivery-loop)
+[![CI](https://github.com/loveowie/delivery-loop/actions/workflows/ci.yml/badge.svg)](https://github.com/loveowie/delivery-loop/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A524-brightgreen.svg)](https://nodejs.org/)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.x-17857C.svg)](https://github.com/deepseek-ai/deepseek-harness)
 
-Delivery Loop is a native **DeepSeek Harness (DSH)** plugin for resumable end-to-end software delivery. It turns an approved specification into a persistent task DAG, runs each task in a fresh DSH subagent, verifies the resulting content, turns test and review failures into new tasks, and continues until acceptance passes or a human decision is required.
+English | [简体中文](README.zh-CN.md)
 
-The plugin runs entirely inside DSH:
+**Resumable, verifiable end-to-end software delivery for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).**
 
-- native Host plugin and native `delivery_*` tools;
-- workers are fresh `ctx.subagents` children, not external CLI processes;
-- the controller runs in the DSH Host process;
-- the Skill, run state, evidence, decisions, and Web view are first-class DSH surfaces.
+> Status: 0.2.0, the first public release. Pre-1.0 interfaces may change; see the [changelog](CHANGELOG.md) before upgrading.
 
-## What it provides
+Delivery Loop turns an approved specification into a persistent task graph, runs every task in a fresh DSH subagent, verifies the result against a code snapshot, converts test and review failures into repair tasks, and continues until acceptance passes or a human decision is required.
 
-- `deliver-change` Skill for intake, one-time approval and status reporting.
-- Native `delivery_*` tools, an HTTP view API authenticated by the DSH browser session, and a Web delivery board.
-- Deterministic scheduler, task state machine, retry limits and failure fingerprints.
-- Fresh-context DSH subagent workers for implementation, debugging, review and acceptance.
-- Vendored and hash-locked generic Skills; no OpenSpec or domain Skill is required by default.
-- Evidence persisted per code snapshot, with invalidation after integration changes.
-- Isolated Git worktrees, Patch-based integration and `prepare-only` delivery by default.
-- A durable decision journal and changed-file records for the view.
+It is a native DSH plugin: the controller runs in the DSH Host process, workers are `ctx.subagents` children rather than external CLI processes, and the run state, evidence, decision log, and delivery view are first-class DSH surfaces.
 
-## Architecture and run flow
+![The Delivery loop board listing runs by status, with progress, token usage, and repository filters.](assets/screenshots/board-light.png)
 
-Delivery Loop separates **deciding** from **doing**. The Host controller owns the plan, budgets, and state; every unit of work is a disposable, fresh-context DSH subagent. Nothing important lives only in a model's context — each transition is persisted, each result is verified independently, and each failure becomes a task rather than a silent retry.
+## Quick start
 
-> The diagrams below use Mermaid, which GitHub renders inline.
+> Requires DeepSeek Harness 0.2.x, Node.js 24+, and a Git repository.
 
-### Layers
+1. Install the bundle from the **Plugins → Discover** marketplace, from npm, or [from source](docs/installation.md).
+2. Ask the agent to `Use deliver-change to deliver this change end to end…` and describe the work.
+3. Review the prepared scope and acceptance summary, then approve once.
+4. Follow the run in the **Delivery loop** board or with `delivery_status`, and answer decisions as they arrive.
+5. Export the report and confirm a finalization mode when you are ready.
 
-```mermaid
-flowchart TB
-  agent["DSH Agent session"]
-  web["DSH Web page · client.js<br/>sidebar board · composer strip · delivery view"]
+## Why Delivery Loop
 
-  subgraph host["DSH Host plugin · dist/dsh/host.js"]
-    t["deliver-change Skill · system prompt ·<br/>10 native delivery_* tools"]
-    s1["DeliveryService<br/>start / status / respond / control / finalize"]
-    s3["DeliveryRunManager<br/>queue · in-process loop · recovery"]
-    s4["DeliveryController<br/>tick · task lifecycle · evidence · acceptance"]
-    h3["View API · DSH browser session"]
-    s2["DeliveryViewService<br/>runs · detail · files · diff"]
-  end
+A model that works for hours in one context drifts: it forgets approvals, trusts its own claims, and silently retries the same failure. Delivery Loop is built around five rules:
 
-  subgraph exec["Execution surface · inside the Host process"]
-    e1["Worker adapter<br/>ctx.subagents.startActivation"]
-    e2["WorktreeManager<br/>isolated worktrees"]
-    e3["CommandRunner<br/>container / trusted host"]
-    e4["PatchIntegrator<br/>patch integration"]
-  end
+- **The controller decides; workers only do.** Planning, budgets, verification, review, integration, and acceptance are owned by the Host controller, not by a worker's summary.
+- **Evidence is bound to a snapshot.** A passing command counts only for the code snapshot it ran against. Integration invalidates older evidence.
+- **Failures become tasks.** Test failures, review findings, scope violations, and acceptance gaps create bounded repair tasks. Exhausted budgets block a run instead of looping forever.
+- **State is the source of truth.** `run.json` and the event log survive a Host restart; a run with no live worker owner is recovered and re-queued.
+- **Two human gates.** You approve scope and acceptance once, and you confirm a Git finalization action explicitly. Nothing is committed, pushed, or merged by default.
 
-  subgraph store["Persistent state · .delivery/ in the target repository"]
-    st1["run.json · events.jsonl · evidence/"]
-    st2["reports/final.md · delivery.patch"]
-  end
+## Features
 
-  agent --> t
-  web --> h3
-  t --> s1
-  h3 --> s2
-  s2 --> st1
-  s1 --> s3
-  s3 --> s4
-  s4 --> e1
-  s4 --> e2
-  s4 --> e3
-  s4 --> e4
-  s4 --> st1
-  e4 --> st2
-```
+- `deliver-change` skill for intake, one-time approval, and status reporting.
+- Ten native `delivery_*` tools for starting, inspecting, waiting, answering, pausing, resuming, cancelling, exporting, and finalizing runs.
+- Deterministic scheduler with a task state machine, retry limits, failure fingerprints, and queue fencing.
+- Fresh-context DSH subagent workers for planning, implementation, testing, debugging, review, and acceptance.
+- Isolated Git worktrees and patch-based integration; `prepare-only` delivery by default.
+- Snapshot-bound verification evidence, a baseline failure matrix, and a final verification matrix at the accepted snapshot.
+- Independent review and acceptance, with blocking findings turned into repair tasks.
+- A Web delivery board, a composer status strip, a full run view, and a runtime budget settings page.
+- Vendored, hash-locked generic skills; no OpenSpec or domain skill is required for the default profile.
 
-### End-to-end run flow
+## How it works
 
 ```mermaid
 flowchart TD
-  u["User requests an end-to-end delivery"] --> sk["deliver-change Skill intake<br/>confirm goal · scope · acceptance · verification · Git · budget"]
-  sk --> pr[".delivery/prepared/&lt;draft-id&gt;/<br/>spec.md · task-graph.json · delivery.yaml"]
-  pr --> ap{"User approves the<br/>scope and acceptance summary?"}
-  ap -->|"reject"| sk
-  ap -->|"approve"| st["delivery_start<br/>acyclic graph · satisfiable requirements · full coverage"]
-  st --> bl["Preflight, baseline and queueing<br/>Git · runtime · verification backend · repository and worker locks"]
-  bl --> tick["Controller tick<br/>in the Host process"]
-  tick --> sch["Schedule ready tasks<br/>dependencies met · priority · non-overlapping scope · worker cap"]
-  sch --> tp["Task pipeline<br/>execute → verify → review → integrate"]
-  tp --> tick
-  tick --> acc{"Every mandatory acceptance condition<br/>has evidence at the current snapshot?"}
-  acc -->|"yes"| done["COMPLETED"]
-  acc -->|"needs a human answer"| wh["WAITING_HUMAN"]
-  acc -->|"no"| fix["Repair task created, or BLOCKED when budgets are exhausted"]
-  wh -->|"delivery_respond"| tick
-  fix -->|"delivery_resume raises budgets"| tick
-  done --> fin["delivery_export_report → reports/final.md<br/>delivery_finalize (&lt;run-id&gt;:&lt;mode&gt;, prepare-only by default)"]
+  user["Explicit end-to-end request"] --> skill["deliver-change intake<br/>goal · scope · acceptance · verification · Git · budget"]
+  skill --> prepared[".delivery/prepared/&lt;draft-id&gt;/<br/>spec.md · task-graph.json · delivery.yaml"]
+  prepared --> approve{"Scope and acceptance approved?"}
+  approve -->|"no"| skill
+  approve -->|"yes"| start["delivery_start<br/>acyclic graph · satisfiable requirements · full coverage"]
+  start --> loop["Controller loop in the DSH Host"]
+  loop --> tasks["Ready tasks<br/>dependency · priority · scope · worker cap"]
+  tasks --> pipeline["execute → verify → review → integrate"]
+  pipeline --> loop
+  loop --> accept{"Every mandatory acceptance condition<br/>has evidence at the accepted snapshot?"}
+  accept -->|"yes"| done["COMPLETED"]
+  accept -->|"needs a human"| human["WAITING_HUMAN"]
+  accept -->|"no"| repair["Repair task, or BLOCKED when budgets are exhausted"]
+  human -->|"delivery_respond"| loop
+  repair -->|"delivery_resume"| loop
+  done --> report["delivery_export_report<br/>delivery_finalize (explicit confirmation)"]
 ```
 
-### Task pipeline
+Each task moves through `READY → RUNNING → VERIFYING → (REVIEWING) → INTEGRATING → DONE`. A violation or failure sends the task to `FIX_REQUIRED`, creates a bounded repair task, and re-enters the queue. See [Architecture](docs/architecture.md) for the components, lifecycle, recovery, and security boundaries.
 
-```mermaid
-flowchart TD
-  ready["READY"] --> run["RUNNING<br/>prepare worktree · build AgentRequest"]
-  run --> worker["Worker<br/>fresh DSH subagent"]
-  worker --> verify["VERIFYING<br/>scope / output / budget checks · independent commands"]
-  verify -->|"violation or failure"| repair["FIX_REQUIRED<br/>repair task or retry (budget-bound)"]
-  verify -->|"pass"| review{"Review required?"}
-  review -->|"yes"| rv["REVIEWING<br/>read-only reviewer"]
-  review -->|"no"| integ["INTEGRATING<br/>patch integration"]
-  rv -->|"blocking finding"| repair
-  rv -->|"pass"| integ
-  integ -->|"conflict"| repair
-  integ -->|"success"| done["DONE<br/>downstream tasks unlocked"]
-  repair --> ready
-```
+The concrete worker mechanics matter for trust:
 
-### Design rules
-
-- **The controller decides, workers do.** A worker only returns a result; the controller runs verification, review, integration, and acceptance itself.
-- **State is the source of truth.** `run.json` plus the event log survive a Host restart; a run whose worker lock has no live owner is recovered and re-queued.
-- **Evidence is snapshot-bound.** A passing command is evidence only for the code snapshot it ran against; integration invalidates older evidence, and completed tasks' commands are re-run in the final verification matrix.
-- **Failures become tasks.** Test failures, review findings, acceptance gaps, and scope violations create bounded repair tasks. Exhausted budgets block the run instead of looping forever.
-- **One approval gate, one finalization gate.** The user approves scope and acceptance once; no Git action happens until `delivery_finalize` receives `<run-id>:<mode>`.
-
-The concrete worker-launch mechanics are described in [How workers run](#how-workers-run).
+- the child runs in the task worktree with its own session, tools, and abort signal;
+- `outputSchema` is the engine's `AgentResult` schema, so the controller receives a validated object;
+- workers are caller-delivered, so results never appear as settlement messages in your conversation;
+- the controller independently rejects a review that changes the candidate snapshot.
 
 ## Requirements
 
-- DeepSeek Harness 0.2.x
-- Node.js 24+
-- Git for the target repository
+| Requirement | Notes |
+| --- | --- |
+| DeepSeek Harness 0.2.x | The plugin uses native `ctx.tools`, `ctx.agents`, and `ctx.subagents` seams. |
+| Node.js 24+ | Declared by `engines` in `package.json`. |
+| Git | Every target repository must be a Git worktree. |
+| Container runtime *(optional)* | Only for the default `container` verification backend. `trusted-host` needs no runtime but is not isolation. |
 
-No external agent CLI or gateway is required.
+No external agent CLI, gateway, or daemon is required.
 
 ## Install
 
-Build the package:
+### From the plugin marketplace
+
+Open **Plugins → Discover** in DSH, search for **Delivery loop**, and install the bundle. Then open the **Delivery loop** entry in the left sidebar.
+
+### From npm
+
+Ask the agent to install the bundle:
+
+```text
+Install the dsh-delivery-loop bundle from npm and enable it.
+```
+
+The equivalent `plugin_manager` call uses `action: install_bundle` with the package name `dsh-delivery-loop` (and the registry the market shows). The package declares `dsh.bundle.patch`, so the bundle inserts its `delivery-loop` row automatically.
+
+### From source
 
 ```bash
-npm install
+git clone https://github.com/loveowie/delivery-loop.git
+cd delivery-loop
+npm ci
 npm run build
 ```
 
-In DSH, install this directory as a local bundle:
+In DSH, choose **Plugins → Add plugin** and select this directory, or run `plugin_manager` with `action: install_bundle` and the absolute directory.
 
-- **Plugins → Add plugin** and choose this directory, or
-- ask the agent to run `plugin_manager` with `action: install_bundle` and the absolute directory.
+After installing or changing `client.js`, refresh the DSH page. The Desktop app needs a restart when the plugin package itself changes; a browser page only needs a reload. If the view returns `401`, reload the bundle so the page receives the current session credential.
 
-The bundle inserts the `delivery-loop` row from `cordis.patch.yml`. Its Host half is `dist/dsh/host.js`; its browser half is `client.js`.
+Full instructions, including upgrade and uninstall, are in [Installation](docs/installation.md).
 
-After installing or changing `client.js`, refresh the DSH page. The view API authenticates the browser session through DSH's Connection service; the Desktop app forwards its Host cookie on every plugin request. A composition without Connection falls back to a per-process token injected into the page. A view that shows `401` is running old page code or lacks the session cookie, so refresh it.
+## First delivery
 
-## Bundle configuration
+Describe the change and ask for Delivery Loop explicitly:
 
-The loader row accepts:
+```text
+Use deliver-change to deliver this change end to end, and keep going until
+it is verified and accepted:
 
-```yaml
-- id: delivery-loop
-  name: 'dsh-delivery-loop'
-  config:
-    apiPrefix: /delivery-loop     # view API prefix
-    modelInvocableSkill: true     # register deliver-change
-    systemPrompt: true            # add the short Delivery Loop prompt section
-    subagentProvider: spawn       # ctx.subagents provider for workers
-    # subagentMaxDepth: 4         # optional recursion cap
-    # defaultRepoRoot: /path/to/repo
+<your requirement>
 ```
 
-See [Configuration](docs/configuration.md) for all fields.
+The skill prepares `.delivery/prepared/<draft-id>/`, shows the scope and acceptance summary, and waits for your approval. After you approve:
+
+- start the run with `delivery_start` (the agent does this for you);
+- follow it in the sidebar board, the composer strip, or with `delivery_status` / `delivery_watch`;
+- answer a pending decision with `delivery_respond`;
+- export `reports/final.md` and confirm a finalization mode when you are ready.
+
+The complete workflow, prepared-file format, and tool reference are in [Usage](docs/usage.md). A minimal portable configuration is in [examples/portable](examples/portable/).
 
 ## The delivery view
 
-The DSH bundle adds a view over the durable run state:
+The DSH bundle adds:
 
-- a **Delivery Loop strip** under the session composer shows the live run, progress, and pending-decision count; click it to open the full view;
-- the full view has **Overview / Tasks / Decisions / Files / Artifacts / Events** tabs:
-  - progress, status, token usage, current tasks and the specification excerpt;
-  - the task graph with attempts, risk, origin, dependencies, scope, failure context and changed files;
-  - a chronological **decision timeline**: dispatch, worker results, verification, review findings, integration, acceptance, retries, budget blocks and every human answer;
-  - changed-file preview and diff, with worktree/repository switching;
-  - run artifacts (`spec.md`, `task-graph.json`, `reports/final.md`, `completion.json`, `delivery.patch`, evidence logs);
-  - the raw event stream;
-- **Left sidebar → 交付循环 / Delivery loop** opens the delivery board: a repository filter row with per-repository counts, then one index table of runs grouped by status (title, repository, status, progress, tokens, updated);
-- a **Settings page** reachable from the board or from any run view edits runtime budgets (total tokens, duration, task attempts, no-progress cycles, parallel workers, worker timeout) without touching `delivery.yaml`. Every field shows the value that will be saved, the built-in default, the effective value and which layer it comes from, so no field is ever an empty box. Values are stored globally in `~/.delivery-loop/settings.json` and per repository in `.delivery/settings.yaml`, apply to runs started afterwards, and a paused or blocked run can be raised from the run's Settings page.
+- a **Delivery loop** board in the left sidebar: repository filters, per-repository counts, and runs grouped by status;
+- a status strip under the session composer that opens the active run;
+- a full run view with **Overview / Tasks / Decisions / Files / Artifacts / Events**;
+- a **Settings** page for runtime budgets (tokens, duration, attempts, progress cycles, parallel workers, worker timeout) that never edits the approved `delivery.yaml`.
 
-The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, editing runtime budgets in the Settings panel, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If neither the DSH browser session nor a token injection mechanism is available, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
+The view is read-only except for pause, resume, cancel, exporting a report, answering pending decisions, applying budget increases, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`.
 
-The view API is same-origin and guarded by the DSH browser session, with a per-process token fallback. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs. Its only write outside a run's state is the Settings panel: `GET/POST /delivery-loop/settings` writes `<repo>/.delivery/settings.yaml` or the global `~/.delivery-loop/settings.json`, accepts only the budget whitelist, and rejects every other config key.
-
-## Use
-
-Call the skill explicitly:
-
-```text
-使用 deliver-change 完成以下需求，并持续实现、修复、评审和验收：
-
-<需求>
-```
-
-The skill prepares:
-
-```text
-.delivery/prepared/<draft-id>/
-├── spec.md
-├── task-graph.json
-└── delivery.yaml (optional; repository root configuration is preferred)
-```
-
-After you approve the scope and acceptance summary, ask the agent to call `delivery_start`. Native tools:
+## Tools
 
 | Tool | Purpose |
 | --- | --- |
 | `delivery_start` | Start an approved prepared run |
-| `delivery_status` | Bounded progress, tasks, pending decisions, recent decisions |
-| `delivery_inspect` | Full view payload: graph, requirements, decisions, files, artifacts |
+| `delivery_status` | Bounded progress, current tasks, pending decisions, recent decisions |
+| `delivery_inspect` | Full view payload: graph, requirements, acceptance, decisions, files, artifacts |
 | `delivery_watch` | Wait for progress or a terminal state |
-| `delivery_respond` | Answer a pending human decision |
-| `delivery_pause` / `delivery_resume` / `delivery_cancel` | Lifecycle control; resume can raise budget/time/attempt limits |
+| `delivery_respond` | Answer one pending human decision |
+| `delivery_pause` | Stop scheduling after the current step |
+| `delivery_resume` | Resume a paused, queued, or blocked run; can raise budgets |
+| `delivery_cancel` | Abort workers and cancel unfinished tasks |
 | `delivery_export_report` | Write `reports/final.md` |
-| `delivery_finalize` | Explicitly confirmed post-completion Git action; confirmation is `<run-id>:<mode>` |
+| `delivery_finalize` | Apply an explicitly confirmed Git action |
 
-## How workers run
+## Configuration
 
-Each task is executed by a fresh DSH child Agent started through `ctx.subagents.startActivation`:
+Start with a repository-level `delivery.yaml`:
 
-- the child runs with the task worktree as `cwd` and its own session, tools, and abort signal;
-- `outputSchema` is the engine's `AgentResult` schema, so the child must call DSH's `structured_output` tool and the controller receives a validated object;
-- `delivery: 'caller'` captures the result in the controller instead of injecting a settlement message into the initiating conversation;
-- the controller runs in the DSH Host process, so the installed plugin owns the loop; the run's initiating Agent is remembered for its worker tree, with a coordinator fallback after a Host restart;
-- token usage is summed from the child session's `assistant/message` usage events; a run reports `usage_incomplete: true` only when no usage event was observed;
-- reviewer and acceptance workers are told to stay read-only, and the controller independently rejects a review that changes the candidate snapshot.
+```yaml
+version: 1
+profile: portable
 
-## Preview the view
+runtime:
+  max_parallel_workers: 2
+  max_task_attempts: 3
+  max_duration_hours: 8
+  max_total_tokens: 2000000
 
-Without starting a real delivery:
+verification:
+  execution:
+    backend: container
+    image: "your-build-image@sha256:<64 lowercase hex digits>"
+  commands:
+    build: ["npm run build"]
+    test: ["npm test"]
+    lint: ["npm run lint"]
 
-```bash
-npm run demo:view
+git:
+  mode: prepare-only
+  worktree_isolation: true
 ```
 
-It creates a synthetic completed run in its own temporary Git repository and registers it under the **交付循环 / Delivery loop** board in the left sidebar. Delete the printed repository directory and its `~/.delivery-loop/runs.json` entry when done.
-
-## Runtime and state
-
-The Host plugin runs the controller loop in-process; there is no detached controller or external worker process. State is written under `.delivery/runs/<run-id>/` with atomic files and locks. The registry at `~/.delivery-loop/runs.json` lets a restarted Host resolve a run and resume it. Tests may inject an in-process controller to keep feedback deterministic.
-
-## Verification
-
-- `npm test` — controller, scheduler, state, evidence, workspace, finalizer, DSH adapter, view service, and real-Git integration tests.
-- `npm run typecheck`
-- `npm run verify:skills`
-- `npm run verify:release` — schema freshness, typecheck/build/tests, DSH package layout and entry syntax.
-
-A completed live DSH-subagent delivery run is recorded in [the verification report](docs/verification-report.md).
+See [Configuration](docs/configuration.md) for every field, precedence rules, the runtime settings panel, verification backends, Git modes, and bundle configuration.
 
 ## Documentation
 
-- [简体中文 README](readme-cn.md)
-- [Configuration](docs/configuration.md)
-- [Operations](docs/operations.md)
-- [Evaluation](docs/evaluation.md)
-- [Design](docs/design/dsh-end-to-end-delivery-plugin-design.md)
-- [Verification isolation design](docs/design/verification-isolation.md)
-- [Verification report](docs/verification-report.md)
+| Document | Audience |
+| --- | --- |
+| [Documentation index](docs/README.md) | Start here for reading paths and conventions |
+| [Installation](docs/installation.md) | Users installing, upgrading, or removing the plugin |
+| [Usage](docs/usage.md) | Users starting and operating a delivery |
+| [Configuration](docs/configuration.md) | Users writing `delivery.yaml` or bundle configuration |
+| [Architecture](docs/architecture.md) | Contributors and reviewers |
+| [Operations](docs/operations.md) | Operators running deliveries day to day |
+| [Troubleshooting](docs/troubleshooting.md) | Anyone diagnosing a failed install or run |
+| [Testing](docs/testing.md) | Contributors and release reviewers |
+| [Publishing](docs/publishing.md) | Maintainers cutting a release |
+| [Design: verification isolation](docs/design/verification-isolation.md) | Proposal, not implemented in 0.2.0 |
+| [Verification report](docs/reports/2026-11-18-verification.md) | Historical release evidence |
+| [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) | Contributors |
 
-## Current limits
+## Compatibility and limitations
 
-- Local verification was performed on macOS; Windows remains unverified.
-- Reviewer/acceptance read-only enforcement is prompt-based plus an independent snapshot check, not an OS sandbox.
-- Token usage is summed from assistant-message usage and can be incomplete when a provider omits usage.
+Delivery Loop 0.2.x targets DeepSeek Harness 0.2.x. The package declares `engines.dsh: ">=0.2.0 <0.3.0"`, so the plugin manager can refuse an incompatible DSH runtime instead of activating it. The plugin depends on DSH seams that may evolve; pin the plugin version you verified and read the [changelog](CHANGELOG.md) before upgrading.
+
+Known limits, stated so they are not mistaken for guarantees:
+
+- Local verification was performed on macOS; Windows is unverified. CI covers unit and integration tests on Ubuntu and macOS.
+- Reviewer and acceptance read-only behavior is prompt-based plus an independent snapshot check, not an OS sandbox.
+- `trusted-host` verification runs on the host with a filtered environment; it is **not** isolation.
+- The default `container` backend is fail-closed and requires a preloaded, digest-pinned image. It never pulls implicitly.
+- Token usage is summed from assistant-message usage events and can be incomplete when a provider omits usage.
 - The coordinator fallback used after a Host restart has not been exercised in a real restart drill.
-- The view's rendered layout, light/dark appearance, focus behavior, and narrow-width layout were not verified in a browser in this environment; refresh the page after install or upgrade.
-- Verification defaults to a fail-closed container backend requiring a preloaded digest-pinned image. This host has no container runtime; explicit trusted-host mode is available for trusted projects.
-- Artifact acceptance is limited to the produced delivery artifact (`delivery.patch`); other artifact types need a project-specific provider.
-- The `merge` finalization mode requires a project-specific finalizer.
+- Rendered browser layout, light/dark appearance, focus behavior, and narrow-width layout are not covered by automated tests; refresh or restart as described in [Installation](docs/installation.md).
+- Artifact acceptance is limited to the produced `delivery.patch`; other artifact types need a project-specific provider.
+- The `merge` finalization mode requires a project-specific finalizer; the generic finalizer refuses it before writing state.
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, test commands, commit conventions, and documentation rules. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Security reports should follow [SECURITY.md](SECURITY.md), not a public issue.
+
+## License
+
+[MIT](LICENSE) © Delivery Loop Contributors.
+
+Vendored skill content and third-party dependencies keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [capabilities/THIRD_PARTY_LICENSES](capabilities/THIRD_PARTY_LICENSES/README.md).

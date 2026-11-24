@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/loveowie/delivery-loop/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.
+  - name: Documentation
+    url: https://github.com/loveowie/delivery-loop#documentation
+    about: Installation, usage, configuration, operations, and troubleshooting.
+  - name: Contributing guide
+    url: https://github.com/loveowie/delivery-loop#contributing
+    about: Development setup, design invariants, and the pull-request checklist.

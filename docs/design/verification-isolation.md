@@ -1,10 +1,20 @@
-# Verification Isolation Design
+# Verification isolation (proposal)
 
-Status: decisions resolved (§14); implementation not started
+> **Status: proposal — not implemented in 0.2.0.**
+>
+> This document records a design direction, not shipped behavior. The released plugin has two
+> verification backends (`container` and `trusted-host`), verifies against the worker's worktree
+> for `trusted-host`, and does not implement `os-sandbox`, snapshot-derived input, two-phase
+> preparation, or capability requirements. Decisions below were reviewed when the proposal was
+> written; they may change before implementation.
+>
+> The current behavior is documented in [Configuration](../configuration.md#verification) and
+> [Architecture](../architecture.md#trust-boundaries).
+
 Scope: `verification.execution` backends, verification evidence, and the trust boundary around
 `delivery_controller`'s verification step.
-Related: [plugin design](dsh-end-to-end-delivery-plugin-design.md),
-[configuration](../configuration.md), [operations](../operations.md).
+Related: [architecture](../architecture.md), [configuration](../configuration.md),
+[operations](../operations.md), [testing](../testing.md).
 
 ## 0. Decisions at a glance
 
@@ -42,7 +52,7 @@ the task worktree with a filtered environment and a temporary `HOME`.
 Two consequences follow:
 
 1. **The default is unusable on a normal developer Mac.** No container runtime means every run
-   blocks at its first verification command ([operations.md](../operations.md#troubleshooting)
+   blocks at its first verification command ([troubleshooting](../troubleshooting.md#verification-blocks-with-a-container-error)
    already documents this).
 2. **`trusted-host` verifies the wrong tree.** It runs in the worktree the worker just edited, so a
    worker can poison `node_modules`, cache directories, or the test files themselves and the re-run

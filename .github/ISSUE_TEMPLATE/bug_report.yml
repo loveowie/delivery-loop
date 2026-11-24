@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible defect in Delivery Loop
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please remove tokens, private paths, and repository contents before submitting.
+        For a security issue, use the private channel in SECURITY.md instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: Delivery Loop version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DeepSeek Harness version
+      placeholder: "0.2.2-rc.3"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, and install method (marketplace, npm, or source).
+      placeholder: "macOS 15, Node 24.4, installed from source"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installation or activation
+        - Delivery view or board
+        - Starting a run
+        - Worker execution
+        - Verification
+        - Review or acceptance
+        - Finalization or Git
+        - Recovery or state
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows the problem.
+      placeholder: |
+        1. Prepare a delivery with ...
+        2. Call delivery_start ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error text and the run id when available.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        delivery_status output, the last events.jsonl records, the failing task's failure_context, and the verification command/error.
+        Redact secrets and private paths.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed tokens, credentials, private paths, and repository content from this report.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

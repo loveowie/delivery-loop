@@ -12,6 +12,9 @@ runtime:
   max_total_tokens: 2000000
 
 verification:
+  # The default container backend needs a digest-pinned image that already
+  # exists locally. A trusted local project may instead select trusted-host in
+  # a prepared copy of this file, after explicit user approval.
   commands:
     build: ["npm run build"]
     test: ["npm test"]

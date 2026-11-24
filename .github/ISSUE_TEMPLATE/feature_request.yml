@@ -1,0 +1,64 @@
+name: Feature request
+description: Propose a capability or a change to Delivery Loop
+title: "[feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the delivery problem first. A concrete proposal helps, but the problem is what we evaluate.
+        Large changes should be agreed in an issue before implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What delivery situation is hard or impossible today? Who experiences it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should happen instead? Include CLI/tool/UI changes if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other designs, or reasons the obvious approach is insufficient.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Skill or intake
+        - Task graph or scheduler
+        - Workers
+        - Verification
+        - Review or acceptance
+        - Delivery view
+        - Configuration
+        - Documentation
+        - Packaging or release
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and compatibility impact
+      description: Does this affect verification, permissions, finalization, run-state compatibility, or the DSH version range?
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for this request.
+          required: true
+        - label: This is not a security vulnerability (those follow SECURITY.md).
+          required: true

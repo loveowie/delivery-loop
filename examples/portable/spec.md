@@ -19,3 +19,7 @@ Add a deterministic greeting function and prove its behavior with an automated t
 
 - No network access.
 - No deployment.
+
+## Risks
+
+- Empty names are a validation edge case; cover them explicitly.

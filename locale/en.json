@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Delivery loop",
-    "description": "Run resumable end-to-end delivery inside DeepSeek Harness: a task graph, isolated workers, verification, independent review, and acceptance. The Delivery loop board in the left sidebar lists every run by status; the session composer strip still opens the active run. The view shows live progress, each decision, task details, changed-file previews, artifacts, and events. Run data stays in the target repository's .delivery/ directory."
+    "description": "Resumable end-to-end delivery for DeepSeek Harness: turn an approved specification into a task graph, run every task in a fresh subagent, and require independent verification, review, and acceptance before completing. Start with the deliver-change skill; follow and control runs in the Delivery loop board in the left sidebar or the status strip under the session composer. Runs are approved once and keep state in the target repository's .delivery/ directory. Finalization is explicit (prepare-only by default), and verification defaults to a required container image."
   }
 }

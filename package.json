@@ -1,7 +1,7 @@
 {
   "name": "dsh-delivery-loop",
   "version": "0.2.0",
-  "description": "Native DeepSeek Harness end-to-end delivery orchestration with DSH subagent workers and a delivery view",
+  "description": "Resumable, verifiable end-to-end software delivery for DeepSeek Harness: task graph, subagent workers, independent verification, review, and acceptance",
   "type": "module",
   "private": false,
   "keywords": [
@@ -42,6 +42,7 @@
   },
   "files": [
     "assets/icon-*.png",
+    "assets/screenshots",
     "capabilities",
     "client.js",
     "cordis.patch.yml",
@@ -54,10 +55,13 @@
     "scripts",
     "skills",
     "README.md",
-    "readme-cn.md",
+    "README.zh-CN.md",
     "LICENSE",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
     "docs/*.md",
-    "docs/design/*.md"
+    "docs/design/*.md",
+    "docs/reports/*.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -84,7 +88,8 @@
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "dsh": ">=0.2.0 <0.3.0"
   },
   "license": "MIT"
 }
