@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { AgentResultSchema } from '../domain/schemas.js';
+import { isInactiveContextError } from '../domain/transient-errors.js';
 import type { AgentRequest, AgentResult } from '../domain/types.js';
 import { buildWorkerPrompt } from './worker-prompt.js';
 import type { WorkerAdapter, WorkerRunOptions } from './worker-adapter.js';
@@ -74,6 +75,15 @@ export interface DshWorkerAdapterOptions {
   fallbackParent?: () => Promise<DshAgent | undefined>;
   /** Optional recursion cap passed to the provider. */
   maxDepth?: number;
+  /**
+   * Attempts used when the parent Agent's context is torn down while the
+   * activation starts. Defaults to 3; tests pin it lower.
+   */
+  activationAttempts?: number;
+  /** Sleep between activation retries; injected in tests. */
+  sleep?: (milliseconds: number) => Promise<void>;
+  /** Diagnostics sink for retried activations; defaults to `console.warn`. */
+  warn?: (message: string) => void;
 }
 
 const SUPPORTED_SCHEMA_KEYS = new Set([
@@ -178,32 +188,96 @@ function buildDshWorkerPrompt(request: AgentRequest): string {
 export class DshSubagentWorkerAdapter implements WorkerAdapter {
   private readonly options: DshWorkerAdapterOptions;
   private readonly outputSchema: Record<string, unknown>;
+  private readonly activationAttempts: number;
+  private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly warn: (message: string) => void;
 
   constructor(options: DshWorkerAdapterOptions) {
     this.options = options;
     this.outputSchema = loadOutputSchema(
       options.schemaPath ?? join(process.cwd(), 'schemas', 'agent-result.schema.json'),
     );
+    this.activationAttempts = Math.max(1, options.activationAttempts ?? 3);
+    this.sleep = options.sleep ?? (async (milliseconds: number) => {
+      await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    });
+    this.warn = options.warn ?? ((message: string) => { console.warn(message); });
   }
 
-  private async parentFor(runId: string): Promise<DshAgent | undefined> {
+  private async parentFor(
+    runId: string,
+  ): Promise<{ agent: DshAgent; source: 'resolveParent' | 'fallback' } | undefined> {
     const live = this.options.resolveParent(runId);
-    if (agentIsLive(live) && this.options.host.agents.get(live.id) === live) return live;
+    if (agentIsLive(live) && this.options.host.agents.get(live.id) === live) {
+      return { agent: live, source: 'resolveParent' };
+    }
     const fallback = await this.options.fallbackParent?.();
     if (
       agentIsLive(fallback) &&
       this.options.host.agents.get(fallback.id) === fallback
     ) {
-      return fallback;
+      return { agent: fallback, source: 'fallback' };
     }
     return undefined;
   }
 
-  async run(request: AgentRequest, runOptions: WorkerRunOptions = {}): Promise<AgentResult> {
-    const parent = await this.parentFor(request.run_id);
-    if (parent === undefined) {
-      return failedResult(request, 'no live DSH parent Agent is available for this delivery run');
+  /**
+   * Start one activation, re-resolving the parent when its context was torn
+   * down between the liveness check and the effect creation.
+   *
+   * The check-then-act window is real: DSH disposes an Agent's fiber when its
+   * activation ends, and the worker tree is started from the Host loop, not
+   * from inside a turn. A retry re-resolves a live parent (usually the
+   * Host-owned coordinator), so the second attempt lands on a durable context.
+   */
+  private async startActivationWithFreshContext(input: {
+    runId: string;
+    taskId: string;
+    provider: string;
+    childId: string;
+    label: string;
+    cwd: string;
+    prompt: Array<{ type: 'text'; text: string }>;
+    signal: AbortSignal;
+  }): Promise<DshActivation> {
+    let last: { message: string; parent: string; source: string } | undefined;
+    for (let attempt = 1; attempt <= this.activationAttempts; attempt += 1) {
+      const resolved = await this.parentFor(input.runId);
+      if (resolved === undefined) {
+        throw new Error('no live DSH parent Agent is available for this delivery run');
+      }
+      try {
+        return await this.options.host.subagents.startActivation({
+          provider: input.provider,
+          childId: input.childId,
+          label: input.label,
+          cwd: input.cwd,
+          prompt: input.prompt,
+          parent: resolved.agent,
+          outputSchema: this.outputSchema,
+          signal: input.signal,
+          delivery: 'caller',
+          ...(this.options.maxDepth === undefined ? {} : { maxDepth: this.options.maxDepth }),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        last = { message, parent: resolved.agent.id, source: resolved.source };
+        if (!isInactiveContextError(message) || attempt >= this.activationAttempts) break;
+        this.warn(
+          `[delivery-loop] worker activation context was disposed; retrying with a fresh parent `
+          + `(run=${input.runId} task=${input.taskId} parent=${resolved.agent.id} source=${resolved.source} `
+          + `attempt=${attempt}/${this.activationAttempts}): ${message}`,
+        );
+        await this.sleep(attempt * 100);
+      }
     }
+    throw new Error(
+      `${last?.message ?? 'DSH worker activation failed'}`
+      + (last === undefined ? '' : ` (parent ${last.parent} via ${last.source}, ${this.activationAttempts} attempt(s))`),
+    );
+  }
+
+  async run(request: AgentRequest, runOptions: WorkerRunOptions = {}): Promise<AgentResult> {
     const providerName = this.options.provider ?? 'spawn';
     if (this.options.host.subagents.getProvider(providerName) === undefined) {
       return failedResult(request, `DSH subagent provider "${providerName}" is not registered`);
@@ -257,17 +331,15 @@ export class DshSubagentWorkerAdapter implements WorkerAdapter {
     let activation: DshActivation | undefined;
 
     try {
-      activation = await this.options.host.subagents.startActivation({
+      activation = await this.startActivationWithFreshContext({
+        runId: request.run_id,
+        taskId: request.task_id,
         provider: providerName,
         childId,
         label: `${request.role}: ${request.task_id}`,
         cwd: request.workdir,
         prompt: [{ type: 'text', text: buildDshWorkerPrompt(request) }],
-        parent,
-        outputSchema: this.outputSchema,
         signal: controller.signal,
-        delivery: 'caller',
-        ...(this.options.maxDepth === undefined ? {} : { maxDepth: this.options.maxDepth }),
       });
       if (stopUsage === undefined) {
         const child = this.options.host.agents.get(activation.childId);

@@ -141,3 +141,94 @@ test('DSH worker adapter fails cleanly when no parent or provider is available',
   assert.equal(value2.status, 'failed');
   assert.match(value2.summary, /not registered/);
 });
+
+test('DSH worker adapter retries activation when the parent context is torn down', async () => {
+  let calls = 0;
+  const sleeps: number[] = [];
+  const warnings: string[] = [];
+  const host = {
+    agents: {
+      get(id: string) { return id === parent.id ? parent : undefined; },
+      list() { return [parent]; },
+    },
+    subagents: {
+      getProvider() { return {}; },
+      async startActivation(spec: Record<string, unknown>) {
+        calls += 1;
+        if (calls === 1) throw new Error('cannot create effect on inactive context');
+        return { childId: String(spec.childId), result: result(completed), dispose: async () => {} };
+      },
+    },
+  };
+  const adapter = new DshSubagentWorkerAdapter({
+    host: host as never,
+    schemaPath: join(process.cwd(), 'schemas', 'agent-result.schema.json'),
+    resolveParent: () => parent,
+    sleep: async (milliseconds) => { sleeps.push(milliseconds); },
+    warn: (message) => { warnings.push(message); },
+  });
+  const value = await adapter.run(request(), {});
+  assert.equal(value.status, 'completed');
+  assert.equal(calls, 2);
+  assert.deepEqual(sleeps, [100]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /context was disposed/);
+  assert.match(warnings[0]!, /parent-agent/);
+  assert.match(warnings[0]!, /source=resolveParent/);
+});
+
+test('DSH worker adapter gives up after the bounded activation attempts', async () => {
+  let calls = 0;
+  const adapter = new DshSubagentWorkerAdapter({
+    host: {
+      agents: {
+        get(id: string) { return id === parent.id ? parent : undefined; },
+        list() { return [parent]; },
+      },
+      subagents: {
+        getProvider() { return {}; },
+        async startActivation() {
+          calls += 1;
+          throw new Error('cannot create effect on inactive context');
+        },
+      },
+    } as never,
+    schemaPath: join(process.cwd(), 'schemas', 'agent-result.schema.json'),
+    resolveParent: () => parent,
+    activationAttempts: 3,
+    sleep: async () => {},
+    warn: () => {},
+  });
+  const value = await adapter.run(request(), {});
+  assert.equal(value.status, 'failed');
+  assert.equal(calls, 3);
+  assert.match(value.summary, /cannot create effect on inactive context/);
+  assert.match(value.summary, /3 attempt/);
+});
+
+test('DSH worker adapter does not retry a configuration failure', async () => {
+  let calls = 0;
+  const adapter = new DshSubagentWorkerAdapter({
+    host: {
+      agents: {
+        get(id: string) { return id === parent.id ? parent : undefined; },
+        list() { return [parent]; },
+      },
+      subagents: {
+        getProvider() { return {}; },
+        async startActivation() {
+          calls += 1;
+          throw new Error('prompt rejected: invalid schema');
+        },
+      },
+    } as never,
+    schemaPath: join(process.cwd(), 'schemas', 'agent-result.schema.json'),
+    resolveParent: () => parent,
+    sleep: async () => {},
+    warn: () => {},
+  });
+  const value = await adapter.run(request(), {});
+  assert.equal(value.status, 'failed');
+  assert.equal(calls, 1);
+  assert.match(value.summary, /invalid schema/);
+});

@@ -20,6 +20,7 @@ import { acquireWorkerLock, hasActiveWorkerLock } from './worker-lock.js';
 import type { WorkerLock } from './worker-lock.js';
 import { recoverInterruptedRun, recoverPausedRun } from '../controller/recovery.js';
 import { recordDecision } from '../controller/decision-journal.js';
+import { isInactiveContextError } from '../domain/transient-errors.js';
 import { createHash } from 'node:crypto';
 
 export interface DeliveryRunManagerOptions {
@@ -56,6 +57,14 @@ const PLANNING_STATUS: ReadonlySet<RunStatus> = new Set(['PLANNING']);
 const PRE_LAUNCH_STATUSES: ReadonlySet<RunStatus> = new Set(['QUEUED', 'PLANNING']);
 /** Bounded compare-and-swap retries for a contended revision. */
 const GUARDED_WRITE_RETRIES = 4;
+/**
+ * How often one loop re-queues its in-flight task when the Host tore down the
+ * Worker parent's context mid-dispatch. The worker adapter already retries the
+ * activation; this is the outer net for the same race when it escapes `tick`.
+ * Bounded, and each recovery consumes one task attempt, so a persistent
+ * failure still ends in a blocked run with its budget explanation.
+ */
+const MAX_TRANSIENT_WORKER_RECOVERIES = 2;
 
 function isTerminalRunStatus(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.has(status);
@@ -652,6 +661,7 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
     });
     let previousProgress = progressSignature(handle.state);
     let stagnantCycles = 0;
+    let transientRecoveries = 0;
     while (true) {
       const state = await handle.store.readRun(handle.state.run_id);
       if (state === undefined) {
@@ -749,6 +759,26 @@ export class DeliveryRunManager implements DeliveryRunManagerPort {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (isInactiveContextError(message) && transientRecoveries < MAX_TRANSIENT_WORKER_RECOVERIES) {
+          transientRecoveries += 1;
+          await recordDecision(handle.store, {
+            run_id: state.run_id,
+            phase: 'lifecycle',
+            code: 'worker_launch_retry',
+            title: 'Worker 启动上下文已失效，自动回收任务后重试',
+            detail: `${message}（自动重试 ${transientRecoveries}/${MAX_TRANSIENT_WORKER_RECOVERIES}，不阻塞运行）`,
+            outcome: 'info',
+          });
+          const recovered = await recoverInterruptedRun(handle.store, state.run_id);
+          handle.state = recovered;
+          previousProgress = progressSignature(recovered);
+          stagnantCycles = 0;
+          if (!runnableStatus(recovered.status)) return;
+          // Give the disposed activation a moment to finish tearing down before
+          // the next dispatch resolves a fresh parent.
+          await sleep(250);
+          continue;
+        }
         const failed = await writeRunGuarded(
           handle.store,
           state.run_id,
