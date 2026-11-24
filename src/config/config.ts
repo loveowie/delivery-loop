@@ -91,7 +91,7 @@ export function mergeDeep<T>(base: T, override: DeepPartial<T> | undefined): T {
   return result as T;
 }
 
-async function readRepositoryConfig(repoRoot: string): Promise<DeepPartial<DeliveryConfig>> {
+export async function readRepositoryConfig(repoRoot: string): Promise<DeepPartial<DeliveryConfig>> {
   const path = join(repoRoot, 'delivery.yaml');
   try {
     await access(path, constants.R_OK);

@@ -24,7 +24,7 @@ A blocked worker or a manual acceptance condition produces a pending decision. R
 ## Control
 
 - `delivery_pause` stops scheduling after the current step.
-- `delivery_resume` resumes a paused, queued or blocked run. It resets blocked tasks within the attempt budget and can raise `max_total_tokens`, `max_duration_hours` or `max_task_attempts`; budget-only decreases are rejected.
+- `delivery_resume` resumes a paused, queued or blocked run. It resets blocked tasks within the attempt budget and can raise `max_total_tokens`, `max_duration_hours` or `max_task_attempts`; budget-only decreases are rejected. The same increase is available from the run's **Settings** panel (**Apply to current run**); budget defaults for future runs live in `delivery.yaml`, the board settings file, or `delivery_start.config_override`.
 - `delivery_cancel` aborts running workers and marks unfinished tasks `CANCELLED`; it cannot be undone.
 - `delivery_export_report` writes `reports/final.md` into the run directory.
 - `delivery_finalize` applies only the explicitly confirmed Git mode; the default is `prepare-only`. `confirmation` must be exactly `<run-id>:<mode>`.

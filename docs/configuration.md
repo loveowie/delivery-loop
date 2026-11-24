@@ -37,6 +37,48 @@ git:
 
 `runtime.daemon_mode` no longer exists: the DSH plugin always runs the controller in the Host process and workers as native subagents.
 
+## Board settings (runtime budgets)
+
+The Delivery board and each run's view link to a **Settings** page. It is the intended
+way to change run budgets: no `delivery.yaml` edit is needed. Each budget row shows the
+value that will be saved, the built-in default, the effective value and the layer it
+comes from; a paused or blocked run can be raised from the same page.
+
+- Global default: `~/.delivery-loop/settings.json` (or `$DELIVERY_LOOP_HOME/settings.json`).
+- Repository: `<repo>/.delivery/settings.yaml`.
+
+Only these runtime fields are accepted; every other key is rejected by the settings API
+and must stay in `delivery.yaml`, because verification, git and review policy are part
+of the approved contract:
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `max_total_tokens` | cumulative token budget per run | 2,000,000 |
+| `max_duration_hours` | wall-clock budget per run | 8 |
+| `max_task_attempts` | attempts per task (re-dispatch rounds) | 3 |
+| `no_progress_cycles` | consecutive scheduler cycles without progress before blocking | 3 |
+| `max_parallel_workers` | tasks executing at the same time | 2 |
+| `default_worker_timeout_seconds` | timeout of one worker attempt | 1800 |
+
+Precedence for a new run:
+
+```
+defaults < repository delivery.yaml < prepared delivery.yaml
+         < global settings < repository settings < delivery_start.config_override
+```
+
+Values are frozen into `.delivery/runs/<run-id>/resolved-config.yaml` when the run
+starts, so a panel change never alters a running run. To raise a budget for a paused
+or blocked run, open that run's **Settings** panel and choose **Apply to current run**;
+it resumes the run with the increased `max_total_tokens`, `max_duration_hours` or
+`max_task_attempts`. Budgets can only be increased, matching `delivery_resume`.
+
+The panel writes the same JSON/YAML a human can edit by hand. An invalid file fails the
+next start with the file path and the offending field instead of being ignored quietly.
+
+The view API exposes the same data as `GET ${apiPrefix}/settings?repo_root=<path>` and
+`POST ${apiPrefix}/settings` with `{ scope, repo_root?, runtime?, reset? }`.
+
 ## Optional OpenSpec provider
 
 ```yaml

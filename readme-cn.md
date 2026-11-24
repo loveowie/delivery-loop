@@ -178,11 +178,12 @@ DSH bundle 在持久运行状态之上提供了一套视图：
   - 变更文件预览与 diff，支持在 worktree/仓库之间切换；
   - 运行产物（`spec.md`、`task-graph.json`、`reports/final.md`、`completion.json`、`delivery.patch`、证据日志）；
   - 原始事件流；
-- **左侧边栏 → 交付循环 / Delivery loop** 打开交付看板，按状态列出跨仓库注册的所有运行。
+- **左侧边栏 → 交付循环 / Delivery loop** 打开交付看板：顶部是按仓库筛选的标签行（带每个仓库的运行数），下面是按状态分组的索引表（运行、仓库、状态、进度、Token、更新）；
+- 看板与运行详情里都能进入 **设置** 页，直接调整运行预算（Token 总量、时长、单任务尝试轮数、连续无进展轮数、并行 Worker 数、Worker 超时），无需改 `delivery.yaml`。每个字段都会显示将保存的值、内置默认值、当前生效值及其来源，不再出现空输入框。值分别保存在全局的 `~/.delivery-loop/settings.json` 与仓库内的 `.delivery/settings.yaml`，对之后新建的运行生效；已暂停或已阻塞的运行可在运行详情的设置页里上调预算。
 
-除暂停、恢复、取消、导出报告、回答待处理的人工决策，以及经模式确认的定稿请求外，视图是只读的。运行数据保存在目标仓库的 `.delivery/` 目录，跨运行索引保存在 `~/.delivery-loop/runs.json`。如果 DSH 浏览器会话与令牌注入机制都不可用，插件会拒绝注册 HTTP API，而不是暴露一个未鉴权的接口。
+除暂停、恢复、取消、导出报告、回答待处理的人工决策、在设置面板中调整运行预算，以及经模式确认的定稿请求外，视图是只读的。运行数据保存在目标仓库的 `.delivery/` 目录，跨运行索引保存在 `~/.delivery-loop/runs.json`。如果 DSH 浏览器会话与令牌注入机制都不可用，插件会拒绝注册 HTTP API，而不是暴露一个未鉴权的接口。
 
-视图 API 为同源访问，由 DSH 浏览器会话保护，并以按进程令牌作为回退。它只读取该运行的仓库、其 worktree 以及 `.delivery` 产物，拒绝这些根之外的路径（包括符号链接逃逸），并且绝不会仅仅为了列出运行而创建 `.delivery` 目录。
+视图 API 为同源访问，由 DSH 浏览器会话保护，并以按进程令牌作为回退。它只读取该运行的仓库、其 worktree 以及 `.delivery` 产物，拒绝这些根之外的路径（包括符号链接逃逸），并且绝不会仅仅为了列出运行而创建 `.delivery` 目录。除运行状态外，它唯一的写入来自设置面板：`GET/POST /delivery-loop/settings` 只会写 `<repo>/.delivery/settings.yaml` 或全局 `~/.delivery-loop/settings.json`，仅接受预算白名单字段，其他配置键一律拒绝。
 
 ## 使用
 
@@ -257,6 +258,7 @@ Host 插件在进程内运行控制循环；不存在分离的控制器或外部
 - [运维手册](docs/operations.md)
 - [评估](docs/evaluation.md)
 - [设计文档](docs/design/dsh-end-to-end-delivery-plugin-design.md)
+- [验证隔离设计](docs/design/verification-isolation.md)
 - [验证报告](docs/verification-report.md)
 
 ## 当前限制

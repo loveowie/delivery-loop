@@ -88,3 +88,54 @@ test('prepared trusted-host verification requires explicit start acknowledgement
   });
   assert.equal(state.config.verification.execution?.backend, 'trusted-host');
 });
+
+test('view settings override the prepared runtime block but not an explicit start override', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'delivery-loop-run-factory-'));
+  const home = await mkdtemp(join(tmpdir(), 'delivery-loop-settings-home-'));
+  const prepared = join(repo, '.delivery', 'prepared', 'draft-settings');
+  await mkdir(prepared, { recursive: true });
+  await writeFile(join(prepared, 'spec.md'), '# Spec\n');
+  await writeFile(
+    join(prepared, 'delivery.yaml'),
+    ['runtime:', '  max_total_tokens: 1000000', '  max_duration_hours: 3'].join('\n'),
+  );
+  await writeFile(
+    join(prepared, 'task-graph.json'),
+    JSON.stringify({
+      run_id: 'draft',
+      requirements: [{ id: 'R', description: 'r', status: 'PENDING' }],
+      acceptance: [{ id: 'A', requirement_id: 'R', description: 'check', verification: { type: 'manual' }, mandatory: true, risk: 'low' }],
+      tasks: [],
+    }),
+  );
+  const { SettingsStore } = await import('../../src/config/settings.js');
+  const settings = new SettingsStore({ home });
+  await settings.writeGlobal({ max_total_tokens: 5000000 });
+  await settings.writeRepo(repo, { max_duration_hours: 6 });
+
+  const factory = new PreparedRunFactory({
+    inspector: {
+      async inspect() {
+        return { canonical_root: repo, baseline_commit: 'abc123' };
+      },
+    },
+    settings,
+  });
+
+  const state = await factory.create({
+    repo_root: repo,
+    prepared_directory: prepared,
+    run_id: 'run-settings',
+  });
+  assert.equal(state.config.runtime.max_total_tokens, 5_000_000);
+  assert.equal(state.config.runtime.max_duration_hours, 6);
+  assert.equal(state.config.runtime.default_worker_timeout_seconds, 1800);
+
+  const pinned = await factory.create({
+    repo_root: repo,
+    prepared_directory: prepared,
+    run_id: 'run-pinned',
+    config_override: { runtime: { max_total_tokens: 2_000_000 } },
+  });
+  assert.equal(pinned.config.runtime.max_total_tokens, 2_000_000);
+});

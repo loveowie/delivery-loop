@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { parse as parseYaml } from 'yaml';
 import { loadConfig, mergeDeep } from '../config/config.js';
+import { SettingsStore } from '../config/settings.js';
 import { TaskGraphSchema, validateTaskGraph } from '../domain/schemas.js';
 import { validateDeliveryContract } from '../domain/contract.js';
 import type { DeepPartial, DeliveryConfig, RunState, TaskGraph } from '../domain/types.js';
@@ -33,6 +34,8 @@ export interface CreatePreparedRunInput {
 
 export interface PreparedRunFactoryOptions {
   inspector: RepositoryInspector;
+  /** Defaults to the global Delivery view settings store. */
+  settings?: SettingsStore;
 }
 
 function generatedRunId(): string {
@@ -44,7 +47,10 @@ export class PreparedRunFactory {
   private readonly options: PreparedRunFactoryOptions;
 
   constructor(options: PreparedRunFactoryOptions | RepositoryInspector) {
-    this.options = 'inspect' in options ? { inspector: options } : options;
+    const legacy = options as RepositoryInspector;
+    this.options = typeof legacy.inspect === 'function'
+      ? { inspector: legacy }
+      : options as PreparedRunFactoryOptions;
   }
 
   async create(input: CreatePreparedRunInput): Promise<RunState> {
@@ -61,9 +67,18 @@ export class PreparedRunFactory {
         throw error;
       }
     }
+    // Budget settings from the view panel sit above the prepared spec's
+    // runtime block (a planner writes one into every spec) and below an
+    // explicit per-run `config_override`, so a human can raise a budget
+    // without editing YAML while a caller can still pin one value for a run.
+    const settingsRuntime = await (this.options.settings ?? new SettingsStore())
+      .mergedRuntime(inspection.canonical_root);
+    const withSettings: DeepPartial<DeliveryConfig> = Object.keys(settingsRuntime).length === 0
+      ? preparedConfig
+      : mergeDeep(preparedConfig, { runtime: settingsRuntime });
     const config = await loadConfig(
       inspection.canonical_root,
-      mergeDeep(preparedConfig, input.config_override),
+      mergeDeep(withSettings, input.config_override),
     );
     if (
       config.verification.execution?.backend === 'trusted-host' &&

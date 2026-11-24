@@ -28,11 +28,21 @@ window.__ModuleLoader__.load({
       { key: 'ended', label: 'board.ended', statuses: ['CANCELLED'] },
     ];
 
+    // Runtime budgets a human can change from the board instead of editing
+    // delivery.yaml. Keep the same whitelist as src/config/settings.ts.
+    const SETTINGS_FIELDS = [
+      { key: 'max_total_tokens', label: 'settings.field.max_total_tokens', integer: true },
+      { key: 'max_duration_hours', label: 'settings.field.max_duration_hours', integer: false },
+      { key: 'max_task_attempts', label: 'settings.field.max_task_attempts', integer: true },
+      { key: 'no_progress_cycles', label: 'settings.field.no_progress_cycles', integer: true },
+      { key: 'max_parallel_workers', label: 'settings.field.max_parallel_workers', integer: true },
+      { key: 'default_worker_timeout_seconds', label: 'settings.field.default_worker_timeout_seconds', integer: true },
+    ];
+
     const zh = {
       nav: '交付循环',
       'board.title': '交付循环',
-      'board.subtitle': '按状态查看所有已批准的端到端交付运行；点击卡片查看任务图、每次决策、变更文件与验收证据。',
-      'board.empty': '还没有交付运行。在会话中让 Agent 使用 deliver-change 技能准备并启动一个运行。',
+      'board.empty': '暂无运行',
       'board.refresh': '刷新',
       'board.open': '打开详情',
       'board.total': '运行总数',
@@ -108,8 +118,7 @@ window.__ModuleLoader__.load({
       'runList': '运行列表',
       'error.LoadFailed': '加载失败',
       'error.ActionFailed': '操作失败',
-      'acceptanceRejectHint': '拒绝只会记录这次人工决策；运行仍会等待验收通过。',
-      'tool.notIndexed': '运行尚未出现在索引中，请在交付循环看板中刷新。',
+      'tool.notIndexed': '尚未索引',
       'status.DRAFT': '草稿',
       'status.SPEC_READY': '规格就绪',
       'status.QUEUED': '排队中',
@@ -131,13 +140,53 @@ window.__ModuleLoader__.load({
       'phase.human': '人工',
       'phase.lifecycle': '生命周期',
       'phase.system': '系统',
+      'board.allRepos': '全部',
+      'board.filter': '筛选运行',
+      'board.footer': '{runs} 个运行 · {repos} 个仓库',
+      'board.noMatch': '没有匹配的运行。',
+      'board.updated': '更新',
+      'board.openRun': '打开运行详情',
+      'settings.open': '设置',
+      'settings.title': '预算与限制',
+      'settings.back': '返回看板',
+      'settings.backToRun': '返回运行',
+      'settings.scope': '作用范围',
+      'settings.repoScope': '本仓库',
+      'settings.globalScope': '全局默认',
+      'settings.repoPick': '选择仓库',
+      'settings.field.max_total_tokens': 'Token 总量上限',
+      'settings.field.max_duration_hours': '最长运行时长（小时）',
+      'settings.field.max_task_attempts': '单任务最大尝试轮数',
+      'settings.field.no_progress_cycles': '连续无进展轮数上限',
+      'settings.field.max_parallel_workers': '最大并行 Worker 数',
+      'settings.field.default_worker_timeout_seconds': '单轮 Worker 超时（秒）',
+      'settings.default': '默认',
+      'settings.rowEffective': '生效 {value}',
+      'settings.source.repo': '本仓库',
+      'settings.source.global': '全局默认',
+      'settings.source.yaml': 'delivery.yaml',
+      'settings.source.builtin': '内置',
+      'settings.effectiveLine': '当前生效：Token {tokens} · {hours} 小时 · 尝试 {attempts} 轮',
+      'settings.resetField': '重置',
+      'settings.restoreScope': '恢复默认',
+      'settings.save': '保存',
+      'settings.saving': '保存中…',
+      'settings.saved': '已保存',
+      'settings.restored': '已恢复默认',
+      'settings.invalidField': '请输入大于 0 的数值：',
+      'settings.invalidInteger': '必须是整数：',
+      'settings.applyToRun': '应用到当前运行',
+      'settings.applied': '已应用',
+      'settings.applyNoChange': '没有可以上调的项；先调大至少一项再应用。',
+      'settings.currentRun': '当前运行',
+      'settings.loadFailed': '加载设置失败',
+      'settings.changed': '未保存',
     };
 
     const en = {
       nav: 'Delivery loop',
       'board.title': 'Delivery loop',
-      'board.subtitle': 'Browse every approved end-to-end delivery run by status. Open a card for its task graph, decisions, changed files, and acceptance evidence.',
-      'board.empty': 'No delivery runs yet. Ask the agent to prepare and start one with the deliver-change skill.',
+      'board.empty': 'No runs',
       'board.refresh': 'Refresh',
       'board.open': 'Open',
       'board.total': 'Runs',
@@ -213,8 +262,7 @@ window.__ModuleLoader__.load({
       'runList': 'Runs',
       'error.LoadFailed': 'Failed to load',
       'error.ActionFailed': 'Action failed',
-      'acceptanceRejectHint': 'Rejecting records this decision only; the run still waits for acceptance.',
-      'tool.notIndexed': 'This run is not indexed yet; refresh the Delivery loop board.',
+      'tool.notIndexed': 'Not indexed',
       'status.DRAFT': 'Draft',
       'status.SPEC_READY': 'Spec ready',
       'status.QUEUED': 'Queued',
@@ -236,6 +284,47 @@ window.__ModuleLoader__.load({
       'phase.human': 'Human',
       'phase.lifecycle': 'Lifecycle',
       'phase.system': 'System',
+      'board.allRepos': 'All',
+      'board.filter': 'Filter runs',
+      'board.footer': '{runs} runs · {repos} repositories',
+      'board.noMatch': 'No matching runs.',
+      'board.updated': 'Updated',
+      'board.openRun': 'Open run',
+      'settings.open': 'Settings',
+      'settings.title': 'Budgets and limits',
+      'settings.back': 'Back to board',
+      'settings.backToRun': 'Back to run',
+      'settings.scope': 'Scope',
+      'settings.repoScope': 'This repository',
+      'settings.globalScope': 'Global default',
+      'settings.repoPick': 'Choose repository',
+      'settings.field.max_total_tokens': 'Total token budget',
+      'settings.field.max_duration_hours': 'Maximum run duration (hours)',
+      'settings.field.max_task_attempts': 'Maximum task attempts',
+      'settings.field.no_progress_cycles': 'No-progress cycle limit',
+      'settings.field.max_parallel_workers': 'Maximum parallel workers',
+      'settings.field.default_worker_timeout_seconds': 'Worker timeout per attempt (seconds)',
+      'settings.default': 'Default',
+      'settings.rowEffective': 'effective {value}',
+      'settings.source.repo': 'repository',
+      'settings.source.global': 'global default',
+      'settings.source.yaml': 'delivery.yaml',
+      'settings.source.builtin': 'built-in',
+      'settings.effectiveLine': 'Effective: {tokens} tokens · {hours} h · {attempts} attempts',
+      'settings.resetField': 'Reset',
+      'settings.restoreScope': 'Restore defaults',
+      'settings.save': 'Save',
+      'settings.saving': 'Saving…',
+      'settings.saved': 'Saved',
+      'settings.restored': 'Restored',
+      'settings.invalidField': 'Enter a number greater than 0: ',
+      'settings.invalidInteger': 'Must be an integer: ',
+      'settings.applyToRun': 'Apply to current run',
+      'settings.applied': 'Applied',
+      'settings.applyNoChange': 'Nothing to raise; increase at least one value before applying.',
+      'settings.currentRun': 'Current run',
+      'settings.loadFailed': 'Failed to load settings',
+      'settings.changed': 'Unsaved',
     };
 
     let bridge = {
@@ -335,6 +424,21 @@ window.__ModuleLoader__.load({
 
     function openDelivery(detail) {
       window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail }));
+    }
+
+    function repoLabel(root) {
+      if (typeof root !== 'string' || root.length === 0) return '';
+      const trimmed = root.replace(/[\\/]+$/, '');
+      const parts = trimmed.split(/[\\/]/).filter(Boolean);
+      return parts.length === 0 ? root : parts[parts.length - 1];
+    }
+
+    function fmtStamp(value) {
+      if (typeof value !== 'string' || value.length === 0) return '—';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      const pad = (number) => String(number).padStart(2, '0');
+      return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
 
     async function getJson(url) {
@@ -455,12 +559,13 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dl-stat-value', style: tone ? { color: tone } : undefined }, value));
     }
 
-    function TabButton({ active, children, onClick }) {
+    function TabButton({ active, children, onClick, disabled = false }) {
       return h('button', {
         type: 'button',
         role: 'tab',
         'aria-selected': active,
         className: cx('dl-tab', active && 'dl-tab-active'),
+        disabled,
         onClick,
       }, children);
     }
@@ -491,7 +596,6 @@ window.__ModuleLoader__.load({
       const busyRef = useRef(false);
       const [error, setError] = useState(null);
       const options = Array.isArray(decision.options) && decision.options.length > 0 ? decision.options : ['approve', 'reject'];
-      const acceptance = decision.data?.type === 'acceptance';
       const submit = async (response) => {
         if (busyRef.current) return;
         const answer = response ?? value;
@@ -522,7 +626,6 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dl-decision-time' }, fmtTime(decision.timestamp))),
         h('div', { className: 'dl-decision-title' }, decision.title),
         decision.detail ? h('div', { className: 'dl-decision-detail' }, decision.detail) : null,
-        acceptance ? h('div', { className: 'dl-hint' }, t('acceptanceRejectHint')) : null,
         h('div', { className: 'dl-decision-actions' },
           ...options.map((option) => h(Button, {
             key: option,
@@ -769,7 +872,257 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dl-error-text' }, detail.last_error || t('noError')))));
     }
 
-    function RunHeader({ detail, onClose, onAction, busy }) {
+    function formatNumber(value) {
+      return typeof value === 'number' ? value.toLocaleString('en-US') : '—';
+    }
+
+    function settingsSourceKey(payload, key) {
+      if (payload === null || payload === undefined) return 'builtin';
+      if (payload.repo?.runtime?.[key] !== undefined) return 'repo';
+      if (payload.global?.runtime?.[key] !== undefined) return 'global';
+      if (payload.delivery_yaml?.runtime?.[key] !== undefined) return 'yaml';
+      return 'builtin';
+    }
+
+    function settingsValuesFrom(payload, scope) {
+      const values = {};
+      for (const field of SETTINGS_FIELDS) {
+        const layer = payload?.[scope]?.runtime ?? {};
+        const fallback = payload?.defaults ?? {};
+        const value = typeof layer[field.key] === 'number' ? layer[field.key] : fallback[field.key];
+        values[field.key] = typeof value === 'number' ? value.toLocaleString('en-US') : '';
+      }
+      return values;
+    }
+
+    function parseSettingsValues(values, t) {
+      const runtime = {};
+      for (const field of SETTINGS_FIELDS) {
+        const raw = String(values[field.key] ?? '').replaceAll(',', '').trim();
+        if (raw.length === 0) continue;
+        const number = Number(raw);
+        const label = t(field.label);
+        if (!Number.isFinite(number) || number <= 0) throw new Error(`${t('settings.invalidField')}${label}`);
+        if (field.integer && !Number.isInteger(number)) throw new Error(`${t('settings.invalidInteger')}${label}`);
+        runtime[field.key] = number;
+      }
+      return runtime;
+    }
+
+    // Direction 4: the settings surface is a page, not a modal. It renders the
+    // same way inside the board panel and inside the run view, so the budgets,
+    // their defaults and their source are always one glance away.
+    function SettingsPage({ repos, initialRepo, run, onBack, onSaved }) {
+      const t = useT();
+      const [scope, setScope] = useState(initialRepo === null || initialRepo === undefined ? 'global' : 'repo');
+      const [selectedRepo, setSelectedRepo] = useState(initialRepo === undefined ? null : initialRepo);
+      const [data, setData] = useState(null);
+      const [values, setValues] = useState({});
+      const [dirty, setDirty] = useState(false);
+      const [error, setError] = useState(null);
+      const [notice, setNotice] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      useEffect(() => {
+        let alive = true;
+        const url = selectedRepo === null || selectedRepo === undefined
+          ? `${API}/settings`
+          : `${API}/settings?repo_root=${encodeURIComponent(selectedRepo)}`;
+        getJson(url)
+          .then((payload) => {
+            if (!alive) return;
+            setData(payload);
+            setError(null);
+          })
+          .catch((loadError) => {
+            if (alive) setError(`${t('settings.loadFailed')}: ${loadError.message}`);
+          });
+        return () => { alive = false; };
+      }, [selectedRepo]);
+
+      useEffect(() => {
+        if (data === null) return;
+        setValues(settingsValuesFrom(data, scope));
+        setDirty(false);
+      }, [data, scope]);
+
+      const defaults = data?.defaults ?? {};
+      const effective = data?.effective ?? {};
+      const repoOptions = Array.isArray(repos) ? repos : [];
+      const canApply = typeof run?.run_id === 'string' && ['PAUSED', 'BLOCKED'].includes(run?.status);
+      const isRunView = run !== null && run !== undefined;
+
+      const save = async () => {
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+          const runtime = parseSettingsValues(values, t);
+          const payload = await postJson(`${API}/settings`, {
+            scope,
+            ...(selectedRepo === null || selectedRepo === undefined ? {} : { repo_root: selectedRepo }),
+            runtime,
+          });
+          setData(payload);
+          setValues(settingsValuesFrom(payload, scope));
+          setDirty(false);
+          setNotice(Object.keys(runtime).length === 0 ? t('settings.restored') : t('settings.saved'));
+          if (typeof onSaved === 'function') onSaved();
+        } catch (saveError) {
+          setError(saveError.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const restore = async () => {
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+          const payload = await postJson(`${API}/settings`, {
+            scope,
+            ...(selectedRepo === null || selectedRepo === undefined ? {} : { repo_root: selectedRepo }),
+            reset: true,
+          });
+          setData(payload);
+          setValues(settingsValuesFrom(payload, scope));
+          setDirty(false);
+          setNotice(t('settings.restored'));
+          if (typeof onSaved === 'function') onSaved();
+        } catch (restoreError) {
+          setError(restoreError.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const applyToRun = async () => {
+        if (!isRunView) return;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+          const runtime = parseSettingsValues(values, t);
+          const current = run.config?.runtime ?? {};
+          const raised = {};
+          for (const [key, value] of Object.entries(runtime)) {
+            if (typeof current[key] === 'number' && value > current[key]) raised[key] = value;
+          }
+          if (Object.keys(raised).length === 0) throw new Error(t('settings.applyNoChange'));
+          await postJson(`${API}/action`, {
+            action: 'resume',
+            run_id: run.run_id,
+            repo_root: run.repo_root,
+            ...raised,
+          });
+          setNotice(t('settings.applied'));
+          if (typeof onSaved === 'function') onSaved();
+        } catch (applyError) {
+          setError(applyError.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const usedTokens = isRunView ? (run.total_tokens_used ?? 0) : 0;
+      const limitTokens = isRunView ? (run.config?.runtime?.max_total_tokens ?? 0) : 0;
+      const usedPercent = limitTokens > 0 ? Math.min(100, Math.round((usedTokens / limitTokens) * 100)) : 0;
+      const effectiveLine = t('settings.effectiveLine')
+        .replace('{tokens}', formatNumber(effective.max_total_tokens))
+        .replace('{hours}', formatNumber(effective.max_duration_hours))
+        .replace('{attempts}', formatNumber(effective.max_task_attempts));
+
+      return h('div', { className: 'dl-set' },
+        h('div', { className: 'dl-set-head' },
+          h('div', { className: 'dl-set-head-main' },
+            h('h1', { className: 'dl-set-h1' }, t('settings.title'))),
+          typeof onBack === 'function'
+            ? h(Button, { onClick: onBack }, isRunView ? t('settings.backToRun') : t('settings.back'))
+            : null),
+        h('div', { className: 'dl-set-body' },
+          h('div', { className: 'dl-set-main' },
+            error === null ? null : h('div', { className: 'dl-set-banner' }, error),
+            notice === null ? null : h('div', { className: 'dl-set-notice' }, notice),
+            h('div', { className: 'dl-set-card' },
+              h('div', { className: 'dl-set-card-head' },
+                h('h2', null, t('settings.scope')),
+                h('span', { className: 'dl-set-effective' }, effectiveLine)),
+              h('div', { className: 'dl-set-scope' },
+                h('button', {
+                  type: 'button',
+                  className: cx('dl-set-scope-btn', scope === 'repo' && 'dl-set-scope-on'),
+                  disabled: repoOptions.length === 0,
+                  onClick: () => setScope('repo'),
+                }, t('settings.repoScope')),
+                h('button', {
+                  type: 'button',
+                  className: cx('dl-set-scope-btn', scope === 'global' && 'dl-set-scope-on'),
+                  onClick: () => setScope('global'),
+                }, t('settings.globalScope'))),
+              scope === 'repo' && repoOptions.length > 1
+                ? h('select', {
+                  className: 'dl-set-select',
+                  'aria-label': t('settings.repoPick'),
+                  value: selectedRepo ?? '',
+                  onChange: (event) => setSelectedRepo(event.target.value),
+                }, ...repoOptions.map((option) => h('option', { key: option, value: option }, repoLabel(option))))
+                : null,
+              scope === 'repo' && selectedRepo !== null && selectedRepo !== undefined
+                ? h('div', { className: 'dl-set-path dl-mono' }, selectedRepo)
+                : null,
+              ...SETTINGS_FIELDS.map((field) => {
+                const sourceKey = settingsSourceKey(data, field.key);
+                const effectiveValue = typeof effective[field.key] === 'number' ? effective[field.key] : undefined;
+                const defaultText = `${t('settings.default')} ${formatNumber(defaults[field.key])} · ${t('settings.rowEffective').replace('{value}', formatNumber(effectiveValue))} · ${t(`settings.source.${sourceKey}`)} · `;
+                return h('div', { key: field.key, className: 'dl-set-row' },
+                  h('div', { className: 'dl-set-label' },
+                    h('label', { htmlFor: `dl-set-${field.key}` }, t(field.label))),
+                  h('div', { className: 'dl-set-ctl' },
+                    h('input', {
+                      id: `dl-set-${field.key}`,
+                      className: 'dl-set-input',
+                      inputMode: field.integer ? 'numeric' : 'decimal',
+                      value: values[field.key] ?? '',
+                      onChange: (event) => {
+                        const next = event.target.value;
+                        setValues((current) => ({ ...current, [field.key]: next }));
+                        setDirty(true);
+                      },
+                    })),
+                  h('div', { className: 'dl-set-meta' },
+                    defaultText,
+                    h('button', {
+                      type: 'button',
+                      className: 'dl-set-reset',
+                      onClick: () => {
+                        setValues((current) => ({ ...current, [field.key]: String(defaults[field.key] ?? '') }));
+                        setDirty(true);
+                      },
+                    }, t('settings.resetField'))));
+              })),
+            isRunView
+              ? h('div', { className: 'dl-set-card' },
+                h('div', { className: 'dl-set-card-head' },
+                  h('h2', null, t('settings.currentRun')),
+                  h('span', { className: 'dl-set-badge' }, statusLabel(run.status, t))),
+                h('div', { className: 'dl-set-run' },
+                  h('div', { className: 'dl-set-run-title' }, run.title || run.run_id),
+                  h('div', { className: 'dl-set-run-id dl-mono' }, run.run_id),
+                  h('div', { className: 'dl-set-run-bar' }, h('i', { style: { width: `${usedPercent}%` } })),
+                  h('div', { className: 'dl-set-run-meta' },
+                    h('span', null, `${formatNumber(usedTokens)} / ${formatNumber(limitTokens)} tok`),
+                    h('span', null, `${run.done_tasks ?? 0} / ${run.total_tasks ?? 0} ${t('tasks')}`))),
+                h('div', { className: 'dl-set-run-actions' },
+                  h(Button, { disabled: busy || !canApply, onClick: () => void applyToRun() }, t('settings.applyToRun'))))
+              : null,
+            h('div', { className: 'dl-set-actions' },
+              dirty ? h('span', { className: 'dl-set-note' }, t('settings.changed')) : null,
+              h(Button, { disabled: busy, onClick: () => void restore() }, t('settings.restoreScope')),
+              h(Button, { tone: 'primary', disabled: busy, onClick: () => void save() }, busy ? t('settings.saving') : t('settings.save'))))));
+    }
+
+    function RunHeader({ detail, onClose, onAction, onSettings, busy }) {
       const t = useT();
       const canPause = ['RUNNING', 'VERIFYING', 'PLANNING', 'QUEUED'].includes(detail.status);
       const canResume = ['PAUSED', 'BLOCKED', 'QUEUED'].includes(detail.status);
@@ -789,6 +1142,7 @@ window.__ModuleLoader__.load({
           canPause ? h(Button, { disabled: busy, onClick: () => void onAction('pause') }, t('pause')) : null,
           canResume ? h(Button, { disabled: busy, onClick: () => void onAction('resume') }, t('resume')) : null,
           canCancel ? h(Button, { tone: 'danger', disabled: busy, onClick: () => void onAction('cancel') }, t('cancel')) : null,
+          h(Button, { onClick: onSettings }, t('settings.open')),
           h(Button, { disabled: busy, onClick: () => void onAction('export_report') }, t('export')),
           h('button', { type: 'button', className: 'dl-close', onClick: onClose, title: t('close'), 'aria-label': t('close') }, '×')));
     }
@@ -801,6 +1155,7 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = useState('overview');
       const [busy, setBusy] = useState(false);
       const [actionError, setActionError] = useState(null);
+      const [settingsOpen, setSettingsOpen] = useState(false);
       const detailState = useRunDetail(
         session.runId,
         session.repoRoot,
@@ -814,6 +1169,7 @@ window.__ModuleLoader__.load({
           setSession({ open: true, runId: detail.runId ?? null, repoRoot: detail.repoRoot ?? null });
           setTab(detail.tab ?? 'overview');
           setActionError(null);
+          setSettingsOpen(false);
         };
         window.addEventListener(OPEN_EVENT, listener);
         return () => window.removeEventListener(OPEN_EVENT, listener);
@@ -825,7 +1181,8 @@ window.__ModuleLoader__.load({
         const onKeyDown = (event) => {
           if (event.key === 'Escape') {
             event.preventDefault();
-            setSession((current) => ({ ...current, open: false }));
+            if (settingsOpen) setSettingsOpen(false);
+            else setSession((current) => ({ ...current, open: false }));
             return;
           }
           if (event.key !== 'Tab' || panelRef.current === null) return;
@@ -849,7 +1206,7 @@ window.__ModuleLoader__.load({
           window.removeEventListener('keydown', onKeyDown);
           restoreFocus.current?.focus?.();
         };
-      }, [session.open]);
+      }, [session.open, settingsOpen]);
       const detail = detailState.detail;
       const action = async (name, extra) => {
         if (!detail) return;
@@ -882,23 +1239,34 @@ window.__ModuleLoader__.load({
                 busy,
                 onClose: () => setSession((current) => ({ ...current, open: false })),
                 onAction: action,
+                onSettings: () => setSettingsOpen((open) => !open),
               })
               : h('div', { className: 'dl-header' },
                 h('div', { className: 'dl-header-title' }, h('span', { className: 'dl-title' }, t('loading'))),
                 h('button', { type: 'button', className: 'dl-close', onClick: () => setSession((current) => ({ ...current, open: false })), title: t('close'), 'aria-label': t('close') }, '×')),
             actionError ? h('div', { className: 'dl-banner dl-banner-error' }, actionError) : null,
             detailState.error ? h('div', { className: 'dl-banner dl-banner-error' }, detailState.error) : null,
-            detail ? h(React.Fragment, null,
-              h('div', { className: 'dl-tabs', role: 'tablist' },
-                ...[['overview', t('overview')], ['tasks', t('tasks')], ['decisions', t('decisions')], ['files', t('files')], ['artifacts', t('artifacts')], ['events', t('events')]]
-                  .map(([key, label]) => h(TabButton, { key, active: tab === key, onClick: () => setTab(key) }, label))),
-              h('div', { className: 'dl-content' },
-                tab === 'overview' ? h(OverviewTab, { detail, onDone: reload }) : null,
-                tab === 'tasks' ? h(TaskList, { tasks: detail.tasks }) : null,
-                tab === 'decisions' ? h(DecisionTimeline, { runId: detail.run_id, repoRoot: detail.repo_root, decisions: detail.decisions, onDone: reload }) : null,
-                tab === 'files' ? h(FilesTab, { detail, runId: detail.run_id, repoRoot: detail.repo_root }) : null,
-                tab === 'artifacts' ? h(ArtifactsTab, { detail, runId: detail.run_id, repoRoot: detail.repo_root }) : null,
-                tab === 'events' ? h(EventsTab, { detail }) : null))
+            detail
+              ? (settingsOpen
+                ? h('div', { className: 'dl-content dl-content-plain' },
+                  h(SettingsPage, {
+                    repos: [detail.repo_root],
+                    initialRepo: detail.repo_root,
+                    run: detail,
+                    onBack: () => setSettingsOpen(false),
+                    onSaved: () => void reload(),
+                  }))
+                : h(React.Fragment, null,
+                  h('div', { className: 'dl-tabs', role: 'tablist' },
+                    ...[['overview', t('overview')], ['tasks', t('tasks')], ['decisions', t('decisions')], ['files', t('files')], ['artifacts', t('artifacts')], ['events', t('events')]]
+                      .map(([key, label]) => h(TabButton, { key, active: tab === key, onClick: () => setTab(key) }, label))),
+                  h('div', { className: 'dl-content' },
+                    tab === 'overview' ? h(OverviewTab, { detail, onDone: reload }) : null,
+                    tab === 'tasks' ? h(TaskList, { tasks: detail.tasks }) : null,
+                    tab === 'decisions' ? h(DecisionTimeline, { runId: detail.run_id, repoRoot: detail.repo_root, decisions: detail.decisions, onDone: reload }) : null,
+                    tab === 'files' ? h(FilesTab, { detail, runId: detail.run_id, repoRoot: detail.repo_root }) : null,
+                    tab === 'artifacts' ? h(ArtifactsTab, { detail, runId: detail.run_id, repoRoot: detail.repo_root }) : null,
+                    tab === 'events' ? h(EventsTab, { detail }) : null)))
               : h('div', { className: 'dl-content' }, h(Empty, null, t('loading'))))));
     }
 
@@ -944,112 +1312,159 @@ window.__ModuleLoader__.load({
         h('rect', { x: 16, y: 4, width: 5, height: 7, rx: 1.5, stroke: 'currentColor', strokeWidth: 1.5 }));
     }
 
-    function boardColumnKey(status) {
-      const column = BOARD_COLUMNS.find((candidate) => candidate.statuses.includes(status));
-      return column === undefined ? 'active' : column.key;
-    }
-
-    function boardMetric(label, value, tone) {
-      return h('div', { className: 'dl-board-metric' },
-        h('span', { className: 'dl-board-metric-label' }, label),
-        h('span', { className: 'dl-board-metric-value', style: tone === undefined ? undefined : { color: tone } }, value));
-    }
-
-    function BoardCard({ run, onOpen }) {
-      const t = useT();
-      const pending = Array.isArray(run.pending_decision_ids) ? run.pending_decision_ids.length : 0;
-      const current = Array.isArray(run.current_task_ids) ? run.current_task_ids : [];
-      const activate = () => onOpen(run);
-      return h('div', {
-        className: cx('dl-card', pending > 0 && 'dl-card-pending'),
-        role: 'button',
-        tabIndex: 0,
-        title: t('board.open'),
-        onClick: activate,
-        onKeyDown: (event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            activate();
-          }
-        },
-      },
-        h('div', { className: 'dl-card-top' },
-          h(StatusPill, { status: run.status, size: 'small' }),
-          h('span', { className: 'dl-card-time', title: run.updated_at }, fmtTime(run.updated_at))),
-        h('div', { className: 'dl-card-title' }, run.title || run.run_id),
-        h('div', { className: 'dl-card-repo dl-mono', title: run.repo_root }, shortPath(run.repo_root, 64)),
-        h(Progress, { done: run.done_tasks ?? 0, total: run.total_tasks ?? 0 }),
-        pending > 0
-          ? h('span', { className: 'dl-card-badge' }, `${t('board.pendingBadge')} · ${pending}`)
-          : null,
-        current.length > 0
-          ? h('div', { className: 'dl-card-tasks' },
-            h('span', { className: 'dl-card-label' }, t('board.currentTasks')),
-            ...current.map((id) => h('span', { key: id, className: 'dl-chip dl-mono' }, id)))
-          : null,
-        run.last_error
-          ? h('div', { className: 'dl-card-error', title: run.last_error }, run.last_error)
-          : null,
-        h('div', { className: 'dl-card-foot' },
-          h('span', { className: 'dl-card-tokens' },
-            `${t('tokens')} ${(run.total_tokens_used ?? 0).toLocaleString()}`),
-          h('span', { className: 'dl-card-open' }, `${t('board.open')} ›`)));
-    }
-
-    function BoardColumn({ column, runs, onOpen }) {
-      const t = useT();
-      return h('section', { className: 'dl-board-column', 'data-column': column.key },
-        h('div', { className: 'dl-board-column-head' },
-          h('span', { className: 'dl-board-column-title' }, t(column.label)),
-          h('span', { className: 'dl-board-column-count' }, String(runs.length))),
-        h('div', { className: 'dl-board-column-body' },
-          runs.length === 0 ? h('div', { className: 'dl-board-column-empty' }, t('board.noCards')) : null,
-          ...runs.map((run) => h(BoardCard, { key: run.run_id, run, onOpen }))));
-    }
-
     function DeliveryBoard() {
       const t = useT();
       const { runs, error, loading, reload } = useRuns(undefined, 5000);
+      const [view, setView] = useState('board');
+      const [repo, setRepo] = useState('all');
+      const [query, setQuery] = useState('');
       const sorted = useMemo(() => runs.slice().sort((left, right) => {
         const leftTime = Date.parse(left.updated_at ?? '') || 0;
         const rightTime = Date.parse(right.updated_at ?? '') || 0;
         return rightTime - leftTime;
       }), [runs]);
-      const grouped = useMemo(() => {
-        const next = Object.fromEntries(BOARD_COLUMNS.map((column) => [column.key, []]));
-        for (const run of sorted) next[boardColumnKey(run.status)].push(run);
-        return next;
+      const repos = useMemo(() => {
+        const seen = new Set();
+        const list = [];
+        for (const run of sorted) {
+          const root = run.repo_root;
+          if (typeof root !== 'string' || root.length === 0 || seen.has(root)) continue;
+          seen.add(root);
+          list.push(root);
+        }
+        return list;
       }, [sorted]);
-      const active = BOARD_COLUMNS[0].statuses.reduce((count, status) =>
-        count + sorted.filter((run) => run.status === status).length, 0);
-      const waiting = sorted.filter((run) => run.status === 'WAITING_HUMAN').length;
-      const pending = sorted.reduce((count, run) =>
-        count + (Array.isArray(run.pending_decision_ids) ? run.pending_decision_ids.length : 0), 0);
+      useEffect(() => {
+        if (repo !== 'all' && repos.length > 0 && !repos.includes(repo)) setRepo('all');
+      }, [repos, repo]);
+      const filtered = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        return sorted.filter((run) => {
+          if (repo !== 'all' && run.repo_root !== repo) return false;
+          if (needle === '') return true;
+          return `${run.title ?? ''} ${run.run_id} ${run.repo_root}`.toLowerCase().includes(needle);
+        });
+      }, [sorted, repo, query]);
       const unauthorized = typeof error === 'string' && error.toLowerCase().includes('unauthorized');
-      const open = (run) => openDelivery({ repoRoot: run.repo_root, runId: run.run_id });
+      const settingsRepo = repo === 'all' ? (repos[0] ?? null) : repo;
+
+      if (view === 'settings') {
+        return h(React.Fragment, null,
+          h(Styles),
+          h(SettingsPage, {
+            repos,
+            initialRepo: settingsRepo,
+            run: null,
+            onBack: () => setView('board'),
+            onSaved: () => void reload(),
+          }));
+      }
+
+      const repoTabs = [
+        { key: 'all', label: t('board.allRepos'), count: sorted.length, title: null },
+        ...repos.map((root) => ({
+          key: root,
+          label: repoLabel(root),
+          count: sorted.filter((run) => run.repo_root === root).length,
+          title: root,
+        })),
+      ];
+      const groups = BOARD_COLUMNS
+        .map((column) => ({
+          key: column.key,
+          label: t(column.label),
+          runs: filtered.filter((run) => column.statuses.includes(run.status)),
+        }))
+        .filter((group) => group.runs.length > 0);
+
+      const openRun = (run) => openDelivery({ repoRoot: run.repo_root, runId: run.run_id });
+
       return h(React.Fragment, null,
         h(Styles),
-        h('div', { className: 'dl-board' },
-          h('div', { className: 'dl-board-head' },
-            h('div', { className: 'dl-board-head-main' },
-              h('div', { className: 'dl-board-title' }, t('board.title')),
-              h('div', { className: 'dl-board-sub' }, t('board.subtitle'))),
-            h('div', { className: 'dl-board-actions' },
-              h(Button, { onClick: () => void reload(), disabled: loading }, t('board.refresh')))),
-          h('div', { className: 'dl-board-metrics' },
-            boardMetric(t('board.total'), String(sorted.length)),
-            boardMetric(t('board.active'), String(active), 'var(--dsw-alias-brand-primary)'),
-            boardMetric(t('board.waiting'), String(waiting), waiting > 0 ? 'var(--dsw-alias-state-warn-primary)' : undefined),
-            boardMetric(t('pending'), String(pending), pending > 0 ? 'var(--dsw-alias-state-warn-primary)' : undefined)),
+        h('div', { className: 'dl-idx' },
+          h('div', { className: 'dl-idx-head' },
+            h('div', { className: 'dl-idx-head-main' },
+              h('h1', { className: 'dl-idx-title' }, t('board.title'))),
+            h('div', { className: 'dl-idx-actions' },
+              h(Button, { disabled: loading, onClick: () => void reload() }, t('board.refresh')),
+              h(Button, { tone: 'primary', onClick: () => setView('settings') }, t('settings.open')))),
+          h('div', { className: 'dl-idx-filters' },
+            ...repoTabs.map((tab) => h('button', {
+              key: tab.key,
+              type: 'button',
+              title: tab.title ?? undefined,
+              className: cx('dl-idx-tab', repo === tab.key && 'dl-idx-tab-on'),
+              onClick: () => setRepo(tab.key),
+            }, tab.label, h('b', null, String(tab.count)))),
+            h('span', { className: 'dl-idx-filters-grow' }),
+            h('label', { className: 'dl-idx-search' },
+              '⌕',
+              h('input', {
+                value: query,
+                placeholder: t('board.filter'),
+                'aria-label': t('board.filter'),
+                onChange: (event) => setQuery(event.target.value),
+              }))),
+          unauthorized
+            ? h('div', { className: 'dl-banner dl-banner-error' }, t('board.unauthorized'), ' ', error)
+            : null,
+          !unauthorized && error ? h(ErrorBanner, { error }) : null,
           loading && sorted.length === 0 ? h(Empty, null, t('loading')) : null,
           !loading && sorted.length === 0 ? h(Empty, null, t('board.empty')) : null,
-          unauthorized ? h('div', { className: 'dl-banner dl-banner-error' }, t('board.unauthorized'), ' ', error) : null,
-          !unauthorized && error ? h(ErrorBanner, { error }) : null,
-          sorted.length > 0
-            ? h('div', { className: 'dl-kanban' },
-              ...BOARD_COLUMNS.map((column) =>
-                h(BoardColumn, { key: column.key, column, runs: grouped[column.key], onOpen: open })))
-            : null));
+          sorted.length > 0 && filtered.length === 0
+            ? h(Empty, null, t('board.noMatch'))
+            : null,
+          filtered.length > 0
+            ? h('table', { className: 'dl-idx-table' },
+              h('thead', null,
+                h('tr', null,
+                  h('th', null, t('run')),
+                  h('th', null, t('repo')),
+                  h('th', null, t('status')),
+                  h('th', null, t('progress')),
+                  h('th', { className: 'r' }, t('tokens')),
+                  h('th', { className: 'r' }, t('board.updated')))),
+              ...groups.map((group) => h('tbody', { key: group.key },
+                h('tr', { className: 'dl-idx-group' },
+                  h('td', { colSpan: 6 },
+                    h('span', { className: 'dl-idx-group-n' }, group.label),
+                    h('span', { className: 'dl-idx-group-c' }, String(group.runs.length)))),
+                ...group.runs.map((run) => {
+                  const total = run.total_tasks ?? 0;
+                  const done = run.done_tasks ?? 0;
+                  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+                  return h('tr', {
+                    key: run.run_id,
+                    className: 'dl-idx-row',
+                    tabIndex: 0,
+                    role: 'button',
+                    title: t('board.openRun'),
+                    onClick: () => openRun(run),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openRun(run);
+                      }
+                    },
+                  },
+                    h('td', { className: 'dl-idx-run' },
+                      h('span', { className: 'dl-idx-run-title' }, run.title || run.run_id),
+                      h('span', { className: 'dl-idx-run-id dl-mono' }, run.run_id)),
+                    h('td', { className: 'dl-idx-repo dl-mono', title: run.repo_root }, repoLabel(run.repo_root)),
+                    h('td', { className: 'dl-idx-status' },
+                      h('span', { className: 'dl-idx-dot', style: { background: statusColor(run.status) } }),
+                      statusLabel(run.status, t)),
+                    h('td', { className: 'dl-idx-prog' },
+                      h('span', { className: 'dl-idx-bar' }, h('i', { style: { width: `${percent}%` } })),
+                      h('span', { className: 'dl-idx-prog-n' }, `${done} / ${total}`)),
+                    h('td', { className: 'dl-idx-tok' }, formatNumber(run.total_tokens_used ?? 0)),
+                    h('td', { className: 'dl-idx-time' }, fmtStamp(run.updated_at)));
+                }))))
+            : null,
+          h('div', { className: 'dl-idx-foot' },
+            h('span', null, t('board.footer')
+              .replace('{runs}', String(sorted.length))
+              .replace('{repos}', String(repos.length))))));
     }
 
     function DeliveryToolCard({ toolName, block, sessionId, useSessions }) {
@@ -1188,7 +1603,7 @@ window.__ModuleLoader__.load({
       .dl-button{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);padding:5px 10px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap}
       .dl-button:hover{background:var(--dsw-alias-bg-layer-2)}
       .dl-button:disabled{opacity:.55;cursor:default}
-      .dl-button-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
+      .dl-button-primary{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base)}
       .dl-button-danger{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
       .dl-muted{color:var(--dsw-alias-label-secondary)}
       .dl-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px}
@@ -1301,6 +1716,108 @@ window.__ModuleLoader__.load({
       .dl-tool-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px}
       .dl-tool-meta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dsw-alias-label-secondary)}
       .dl-tool-warn{color:var(--dsw-alias-state-warn-primary)}
+      .dl-tab:disabled{opacity:.5;cursor:default}
+      .dl-settings-backdrop{position:fixed;inset:0;z-index:2147483100;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.42);padding:24px;box-sizing:border-box}
+      .dl-settings{display:flex;flex-direction:column;width:min(720px,calc(100vw - 32px));max-height:calc(100vh - 64px);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.35);overflow:hidden;font-size:13px}
+      .dl-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+      .dl-settings-head-main{min-width:0}
+      .dl-settings-title{font-size:16px;font-weight:600}
+      .dl-settings-sub{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin-top:4px;max-width:560px}
+      .dl-settings-body{display:flex;flex-direction:column;gap:12px;padding:14px 18px;overflow:auto}
+      .dl-settings-scope{display:flex;gap:6px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+      .dl-settings-scope .dl-tab{padding:8px 10px}
+      .dl-settings-select{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:6px 9px;font-size:12px;outline:none}
+      .dl-settings-path{color:var(--dsw-alias-label-secondary);font-size:11px;word-break:break-all}
+      .dl-settings-fields{display:flex;flex-direction:column;gap:12px}
+      .dl-settings-field{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:2px 14px;align-items:center}
+      .dl-settings-field-label{font-weight:600;font-size:12.5px}
+      .dl-settings-input{width:100%}
+      .dl-settings-field-hint{grid-column:1 / -1;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}
+      .dl-settings-note{color:var(--dsw-alias-label-secondary);font-size:11.5px;white-space:pre-wrap}
+      .dl-settings-run{display:flex;align-items:center;gap:10px;padding-top:4px;flex-wrap:wrap}
+      .dl-settings-banner{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:8px;color:var(--dsw-alias-state-error-primary);font-size:12px;white-space:pre-wrap;word-break:break-word}
+      .dl-settings-notice{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-brand-primary);border-radius:8px;color:var(--dsw-alias-brand-primary);font-size:12px}
+      .dl-settings-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--dsw-alias-border-l1)}
+      .dl-idx,.dl-set{--dl-ink:var(--dsw-alias-label-primary,#0f1115);--dl-muted:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 58%,transparent);--dl-faint:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 40%,transparent);--dl-line:var(--dsw-alias-border-l1,rgba(15,17,21,.07));--dl-line-strong:var(--dsw-alias-border-l2,rgba(15,17,21,.12));--dl-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--dl-ink);font-size:14px}
+      .dl-idx{max-width:1400px;margin:0 auto;padding:24px 28px 40px;box-sizing:border-box}
+      .dl-idx-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+      .dl-idx-head-main{min-width:0}
+      .dl-idx-title{font-size:26px;line-height:1.1;margin:0;letter-spacing:-.02em;font-weight:600}
+      .dl-idx-sub{margin:8px 0 0;color:var(--dl-muted);font-size:12.5px}
+      .dl-idx-actions{display:flex;gap:8px;padding-bottom:2px;flex:0 0 auto}
+      .dl-idx-filters{display:flex;align-items:center;gap:20px;margin-top:24px;border-bottom:1px solid var(--dl-line)}
+      .dl-idx-tab{font-size:12.5px;color:var(--dl-muted);padding:0 0 10px;border:0;border-bottom:1.5px solid transparent;background:none;cursor:pointer;font-family:var(--dl-mono);letter-spacing:-.01em;margin-bottom:-1px}
+      .dl-idx-tab b{color:var(--dl-ink);font-weight:500;margin-left:5px;font-size:11px}
+      .dl-idx-tab-on{color:var(--dl-ink);border-color:var(--dl-ink)}
+      .dl-idx-filters-grow{flex:1}
+      .dl-idx-search{display:flex;align-items:center;gap:6px;color:var(--dl-faint);font-size:12px;padding-bottom:8px}
+      .dl-idx-search input{border:0;outline:none;background:none;color:var(--dl-ink);font-size:12px;width:150px;font-family:inherit}
+      .dl-idx-table{width:100%;border-collapse:collapse;table-layout:fixed}
+      .dl-idx-table th{font-size:11px;color:var(--dl-muted);font-weight:500;text-align:left;letter-spacing:.04em;padding:10px 0 6px;border-bottom:1px solid var(--dl-line)}
+      .dl-idx-table th.r{text-align:right}
+      .dl-idx-table th:nth-child(2),.dl-idx-table td:nth-child(2){width:160px}
+      .dl-idx-table th:nth-child(3),.dl-idx-table td:nth-child(3){width:104px}
+      .dl-idx-table th:nth-child(4),.dl-idx-table td:nth-child(4){width:150px}
+      .dl-idx-table th:nth-child(5),.dl-idx-table td:nth-child(5){width:132px}
+      .dl-idx-table th:nth-child(6),.dl-idx-table td:nth-child(6){width:118px}
+      .dl-idx-group td{padding:24px 0 8px;border-bottom:1px solid var(--dl-line-strong)}
+      .dl-idx-group:first-child td{padding-top:20px}
+      .dl-idx-group-n{font-size:13px;font-weight:600;margin-right:8px}
+      .dl-idx-group-c{font-family:var(--dl-mono);font-size:11px;color:var(--dl-muted)}
+      .dl-idx-row{cursor:pointer}
+      .dl-idx-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 3%,transparent)}
+      .dl-idx-row:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#0f1115);outline-offset:-2px}
+      .dl-idx-row td{padding:11px 0;border-bottom:1px solid var(--dl-line);vertical-align:middle}
+      .dl-idx-run-title{display:block;font-size:13.5px;line-height:1.35}
+      .dl-idx-run-id{display:block;font-size:11px;color:var(--dl-muted);margin-top:2px}
+      .dl-idx-repo{font-size:11px;color:var(--dl-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:12px}
+      .dl-idx-status{font-size:12px;white-space:nowrap}
+      .dl-idx-dot{display:inline-block;width:7px;height:7px;border-radius:99px;margin-right:7px;vertical-align:1px}
+      .dl-idx-bar{display:inline-block;vertical-align:middle;width:92px;height:2px;background:var(--dl-line-strong);position:relative;margin-right:8px}
+      .dl-idx-bar i{position:absolute;left:0;top:0;bottom:0;background:var(--dl-ink)}
+      .dl-idx-prog-n{font-family:var(--dl-mono);font-size:11px;color:var(--dl-muted)}
+      .dl-idx-tok,.dl-idx-time{text-align:right;font-family:var(--dl-mono);font-size:11.5px;white-space:nowrap}
+      .dl-idx-time{color:var(--dl-muted)}
+      .dl-idx-foot{display:flex;justify-content:flex-start;gap:12px;margin-top:28px;border-top:1px solid var(--dl-line);padding-top:12px;font-family:var(--dl-mono);font-size:11px;color:var(--dl-muted)}
+      .dl-set{max-width:960px;margin:0 auto;padding:32px 28px 48px;box-sizing:border-box}
+      .dl-set-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+      .dl-set-head-main{min-width:0}
+      .dl-set-h1{font-size:26px;letter-spacing:-.02em;margin:0;font-weight:600}
+      .dl-set-body{margin-top:20px}
+      .dl-set-main{width:100%}
+      .dl-set-card{border:1px solid var(--dl-line-strong);border-radius:8px;padding:16px 18px;margin-bottom:16px;background:var(--dl-card,transparent)}
+      .dl-set-card-plain{padding:14px 18px}
+      .dl-set-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+      .dl-set-card-head h2{font-size:13px;margin:0;font-weight:600}
+      .dl-set-effective{font-family:var(--dl-mono);font-size:11px;color:var(--dl-muted);text-align:right}
+      .dl-set-scope{display:flex;gap:22px;margin:10px 0 2px;border-bottom:1px solid var(--dl-line)}
+      .dl-set-scope-btn{font-size:12.5px;color:var(--dl-muted);padding:0 0 9px;border:0;border-bottom:1.5px solid transparent;background:none;cursor:pointer;margin-bottom:-1px}
+      .dl-set-scope-on{color:var(--dl-ink);border-color:var(--dl-ink)}
+      .dl-set-scope-btn:disabled{opacity:.45;cursor:default}
+      .dl-set-select{margin:10px 0 0;border:1px solid var(--dl-line-strong);border-radius:6px;background:transparent;color:var(--dl-ink);font-size:12px;padding:6px 8px;outline:none;max-width:100%}
+      .dl-set-path{font-size:11px;color:var(--dl-muted);margin:8px 0 0;word-break:break-all}
+      .dl-set-row{display:grid;grid-template-columns:minmax(0,1fr) 236px;gap:2px 24px;padding:13px 0;border-bottom:1px solid var(--dl-line);align-items:center}
+      .dl-set-label label{font-size:13px;font-weight:500}
+      .dl-set-desc{font-size:11.5px;color:var(--dl-muted);line-height:1.5;margin-top:3px}
+      .dl-set-ctl{display:flex;align-items:center;justify-content:flex-end}
+      .dl-set-input{width:100%;border:1px solid var(--dl-line-strong);border-radius:6px;padding:7px 10px;font-family:var(--dl-mono);font-size:12.5px;text-align:right;outline:none;background:var(--dsw-alias-bg-base,transparent);color:var(--dl-ink)}
+      .dl-set-input:focus{border-color:var(--dsw-alias-brand-primary,#0f1115)}
+      .dl-set-meta{grid-column:1 / -1;font-size:11px;color:var(--dl-muted);text-align:right;font-family:var(--dl-mono);line-height:1.55;margin-top:1px}
+      .dl-set-reset{border:0;background:none;color:var(--dl-ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer;font:inherit;padding:0}
+      .dl-set-banner{margin:0 0 12px;padding:8px 12px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:6px;color:var(--dsw-alias-state-error-primary);font-size:12px;white-space:pre-wrap}
+      .dl-set-notice{margin:0 0 12px;padding:8px 12px;border:1px solid var(--dsw-alias-brand-primary,#0f1115);border-radius:6px;color:var(--dsw-alias-label-primary,#0f1115);font-size:12px}
+      .dl-set-run-title{font-size:13px;font-weight:600}
+      .dl-set-run-id{font-size:11px;color:var(--dl-muted);margin-top:2px}
+      .dl-set-run-bar{height:4px;background:var(--dl-line-strong);margin-top:10px;position:relative}
+      .dl-set-run-bar i{position:absolute;left:0;top:0;bottom:0;background:var(--dsw-alias-state-warn-primary)}
+      .dl-set-run-meta{display:flex;justify-content:space-between;gap:12px;font-family:var(--dl-mono);font-size:11px;color:var(--dl-muted);margin-top:6px}
+      .dl-set-run-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:12px;flex-wrap:wrap}
+      .dl-set-badge{font-family:var(--dl-mono);font-size:10.5px;color:var(--dl-muted);border:1px solid var(--dl-line-strong);border-radius:99px;padding:2px 8px;white-space:nowrap}
+      .dl-set-note{font-size:11px;color:var(--dl-muted);line-height:1.5}
+      .dl-set-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--dl-line-strong);flex-wrap:wrap}
+      .dl-set-actions .dl-set-note{margin-right:auto}
+      .dl-content-plain{padding:0}
+      @media (max-width:980px){.dl-idx-table th:nth-child(2),.dl-idx-table td:nth-child(2),.dl-idx-table th:nth-child(6),.dl-idx-table td:nth-child(6){display:none}.dl-set-body{grid-template-columns:1fr}.dl-set-nav{display:none}.dl-idx-filters{flex-wrap:wrap;gap:12px}}
       @media (max-width:760px){
         .dl-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
         .dl-columns{grid-template-columns:minmax(0,1fr)}
@@ -1311,6 +1828,8 @@ window.__ModuleLoader__.load({
         .dl-board{padding:16px 14px 32px}
         .dl-board-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
         .dl-kanban{grid-auto-columns:minmax(220px,1fr)}
+        .dl-settings{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}
+        .dl-settings-field{grid-template-columns:minmax(0,1fr)}
       }
     `;
 

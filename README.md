@@ -178,11 +178,12 @@ The DSH bundle adds a view over the durable run state:
   - changed-file preview and diff, with worktree/repository switching;
   - run artifacts (`spec.md`, `task-graph.json`, `reports/final.md`, `completion.json`, `delivery.patch`, evidence logs);
   - the raw event stream;
-- **Left sidebar → 交付循环 / Delivery loop** opens the delivery board, which lists every registered run across repositories by status.
+- **Left sidebar → 交付循环 / Delivery loop** opens the delivery board: a repository filter row with per-repository counts, then one index table of runs grouped by status (title, repository, status, progress, tokens, updated);
+- a **Settings page** reachable from the board or from any run view edits runtime budgets (total tokens, duration, task attempts, no-progress cycles, parallel workers, worker timeout) without touching `delivery.yaml`. Every field shows the value that will be saved, the built-in default, the effective value and which layer it comes from, so no field is ever an empty box. Values are stored globally in `~/.delivery-loop/settings.json` and per repository in `.delivery/settings.yaml`, apply to runs started afterwards, and a paused or blocked run can be raised from the run's Settings page.
 
-The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If neither the DSH browser session nor a token injection mechanism is available, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
+The view is read-only except for pause, resume, cancel, export report, answering pending human decisions, editing runtime budgets in the Settings panel, and a mode-confirmed finalization request. Run data stays in the target repository's `.delivery/` directory; the cross-run index stays in `~/.delivery-loop/runs.json`. If neither the DSH browser session nor a token injection mechanism is available, the plugin refuses to register the HTTP API rather than exposing an unauthenticated one.
 
-The view API is same-origin and guarded by the DSH browser session, with a per-process token fallback. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs.
+The view API is same-origin and guarded by the DSH browser session, with a per-process token fallback. It reads only the run's repository, its worktrees, and `.delivery` artifacts, refuses paths outside those roots (including symlink escapes), and never creates a `.delivery` directory just to list runs. Its only write outside a run's state is the Settings panel: `GET/POST /delivery-loop/settings` writes `<repo>/.delivery/settings.yaml` or the global `~/.delivery-loop/settings.json`, accepts only the budget whitelist, and rejects every other config key.
 
 ## Use
 
@@ -257,6 +258,7 @@ A completed live DSH-subagent delivery run is recorded in [the verification repo
 - [Operations](docs/operations.md)
 - [Evaluation](docs/evaluation.md)
 - [Design](docs/design/dsh-end-to-end-delivery-plugin-design.md)
+- [Verification isolation design](docs/design/verification-isolation.md)
 - [Verification report](docs/verification-report.md)
 
 ## Current limits

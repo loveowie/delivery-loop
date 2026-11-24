@@ -10,6 +10,7 @@ import { RunRegistry } from '../runtime/run-registry.js';
 import { DshSubagentWorkerAdapter, agentIsLive } from '../workers/dsh-subagent-adapter.js';
 import type { DshAgent } from '../workers/dsh-subagent-adapter.js';
 import { DeliveryViewService } from './view-service.js';
+import { SettingsService } from '../service/settings-service.js';
 import type { RunDetail, RunSummary } from './view-service.js';
 import type { StartRunInput } from '../runtime/types.js';
 import { recordDecision } from '../controller/decision-journal.js';
@@ -275,6 +276,7 @@ function registerWebApi(ctx: any, options: {
   config: DeliveryLoopConfig;
   view: DeliveryViewService;
   service: DeliveryService;
+  settings: SettingsService;
   token: string;
 }): void {
   const webServer = ctx.get?.('webServer');
@@ -282,7 +284,7 @@ function registerWebApi(ctx: any, options: {
     console.warn('[delivery-loop] webServer is unavailable; the delivery view will not load runs over HTTP.');
     return;
   }
-  const { config, view, service, token } = options;
+  const { config, view, service, settings, token } = options;
   const prefix = config.apiPrefix;
   // The token must reach the page before the client bundle runs. A structured
   // `webserver/index-inject` row does that for both carriers: the Web server
@@ -362,6 +364,24 @@ function registerWebApi(ctx: any, options: {
         if (path === null || path.length === 0) throw new Error('path is required');
         const taskId = url.searchParams.get('task_id') ?? undefined;
         json(res, 200, { path, diff: await view.readDiff(runId, path, repoRoot, taskId) });
+        return;
+      }
+      if (req.method === 'GET' && sub === 'settings') {
+        json(res, 200, await settings.get(repoRoot));
+        return;
+      }
+      if (req.method === 'POST' && sub === 'settings') {
+        const raw = await readBody(req);
+        const body = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+        if (body.scope !== 'global' && body.scope !== 'repo') {
+          throw new Error('scope must be "global" or "repo"');
+        }
+        json(res, 200, await settings.save({
+          scope: body.scope,
+          repo_root: typeof body.repo_root === 'string' ? body.repo_root : repoRoot,
+          runtime: body.runtime,
+          reset: body.reset === true,
+        }));
         return;
       }
       if (req.method === 'POST' && sub === 'action') {
@@ -590,6 +610,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
     async (action, state, context) => await manager.executeFinalize(action, state, context),
   );
   const view = new DeliveryViewService(registry);
+  const settingsService = new SettingsService();
   const viewToken = randomBytes(24).toString('hex');
 
   const resolveRepo = async (explicit: unknown, exec: ToolExecutionLike): Promise<string> => {
@@ -838,7 +859,7 @@ export function apply(ctx: any, rawConfig: unknown): void {
     };
     ctx.tools.register(definition);
   }
-  registerWebApi(ctx, { config, view, service, token: viewToken });
+  registerWebApi(ctx, { config, view, service, settings: settingsService, token: viewToken });
   if (config.modelInvocableSkill) registerSkill(ctx);
   if (config.systemPrompt) registerSystemPrompt(ctx);
 

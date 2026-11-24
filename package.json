@@ -43,11 +43,11 @@
     "generate:schemas": "tsx scripts/generate-schemas.ts",
     "verify:skills": "tsx scripts/sync-vendored-skills.ts --check",
     "update:skills": "tsx scripts/sync-vendored-skills.ts --write",
-    "test": "tsx --test tests/*.test.ts tests/**/*.test.ts",
+    "test": "tsx --test --import ./tests/setup-env.ts tests/*.test.ts tests/**/*.test.ts",
     "test:watch": "tsx --test --watch tests/*.test.ts tests/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "demo:view": "tsx scripts/create-view-demo.ts",
-    "test:integration": "tsx --test tests/e2e/*.test.ts tests/workspace/*real-git.test.ts tests/workers/*process*.test.ts",
+    "test:integration": "tsx --test --import ./tests/setup-env.ts tests/e2e/*.test.ts tests/workspace/*real-git.test.ts tests/workers/*process*.test.ts",
     "verify:release": "tsx scripts/verify-release.ts"
   },
   "dependencies": {
