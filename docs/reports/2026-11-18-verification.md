@@ -27,17 +27,17 @@ A real DSH-hosted run exercised the workflow-hardening patch on this repository:
 
 | Field | Value |
 | --- | --- |
-| Run id | `R-WF-GAP-20261117B` |
+| Run id | `R-EXAMPLE-0101` |
 | Status | `COMPLETED` |
 | Progress | 5/5 tasks |
 | Baseline | `18f9fe7` |
-| Integration snapshot | `SNAP-bee7f0121821` |
+| Integration snapshot | `SNAP-example0001` |
 | Verification | 253 tests at the accepted snapshot; targeted acceptance commands; typecheck and build |
 | Acceptance | 8/8 mandatory conditions with passing evidence at the accepted snapshot |
-| Token usage | 53,752,414 |
+| Token usage | not published |
 | `usage_incomplete` | false |
 | Independent review | all 5 task reviews passed; no blocking finding |
-| Patch round-trip | `delivery.patch` applied to `18f9fe7` reproduces `SNAP-bee7f0121821`; sha256 matches |
+| Patch round-trip | `delivery.patch` applied to `18f9fe7` reproduces `SNAP-example0001`; sha256 matches |
 | Errors / pending decisions | none; one review worker hit a transient DSH worker error and succeeded on retry |
 
 The run covered: repair re-run required-outputs closure, blocker re-dispatch, resume/recovery attempt accounting, pause lifecycle, queue admission fencing, corrupt-run isolation, atomic run creation, final-review/human-acceptance/contract closure, bounded worker timeout with activation disposal, seed/patch/finalize provenance, and parent-Agent fallback.
