@@ -20,11 +20,27 @@ function fakeReact(): Record<string, unknown> {
   };
 }
 
-function loadClient(): { apply: (ctx: unknown) => void } {
+const packageName = (JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+) as { name: string }).name;
+
+function loadClient(options: { strict?: boolean } = {}): { apply: (ctx: unknown) => void; id: string } {
   let factory: ((require: (id: string) => unknown) => { apply: (ctx: unknown) => void }) | undefined;
+  let id = '';
   const window: Record<string, unknown> = {
     __ModuleLoader__: {
       load(definition: { id: string; factory: typeof factory }): void {
+        // DSH binds each boot-graph entry to the factory registered under that
+        // entry's package name; a bundle that registers any other id is never
+        // attached to its slot. Reproduce that contract instead of accepting
+        // whatever id the bundle happens to use.
+        if (options.strict !== false && definition.id !== packageName) {
+          throw new Error(
+            `client-modules: could not load "${packageName}": `
+            + `loaded without registering "${packageName}" via __ModuleLoader__.load`,
+          );
+        }
+        id = definition.id;
         factory = definition.factory;
       },
     },
@@ -33,12 +49,17 @@ function loadClient(): { apply: (ctx: unknown) => void } {
   const evaluate = new Function('window', source) as (scope: Record<string, unknown>) => void;
   evaluate(window);
   assert.ok(factory, 'client.js registers a module factory');
-  const client = factory((id: string) => {
-    if (id === 'react') return fakeReact();
-    throw new Error(`unexpected client require: ${id}`);
+  const client = factory((required: string) => {
+    if (required === 'react') return fakeReact();
+    throw new Error(`unexpected client require: ${required}`);
   });
-  return { apply: client.apply };
+  return { apply: client.apply, id };
 }
+
+test('the client module registers under the package name', () => {
+  const { id } = loadClient({ strict: false });
+  assert.equal(id, packageName);
+});
 
 test('the client registers a sidebar board panel and its main-column page instead of a settings section', () => {
   const { apply } = loadClient();

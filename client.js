@@ -1,6 +1,6 @@
 /* Delivery Loop client: sidebar board, run dock, and full delivery view. */
 window.__ModuleLoader__.load({
-  id: 'delivery-loop',
+  id: 'dsh-delivery-loop',
   factory(require) {
     const React = require('react');
     const h = React.createElement;

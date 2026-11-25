@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.1] - 2026-11-25
+
+A patch release for two activation defects in 0.2.0 that made a clean install unusable: the plugin activated, the `delivery_*` tools worked, but the browser half never bound and every view request answered `404`. It also stops the health payload from reporting a stale version.
+
+### Fixed
+
+- The Client half now registers its factory under the package name (`dsh-delivery-loop`). DSH binds each boot-graph entry to the factory registered under that entry's package name, so 0.2.0's `delivery-loop` id failed with `loaded without registering "dsh-delivery-loop" via __ModuleLoader__.load` and the sidebar entry never appeared.
+- The view API now declares the `webServer` dependency with `ctx.inject(['webServer'], …)` and registers its routes and index injections from that scope. In a real composition the service is provided after the plugin activates; 0.2.0 read it synchronously, logged `webServer is unavailable`, and returned before registering any route.
+- `GET /delivery-loop/api/health` reports the installed package version instead of a hard-coded `0.2.0`.
+- The Host test doubles now model Loader dependency injection instead of handing the plugin a ready `webServer` through `ctx.get`, and the Client test double reproduces DSH's id contract, so both defects fail the suite instead of passing it.
+
 ## [0.2.0] - 2026-11-24
 
 First public release of Delivery Loop as a native DeepSeek Harness plugin.

@@ -4,7 +4,7 @@ This directory contains the user, operator, and contributor documentation for De
 
 ## Conventions
 
-- These documents describe version 0.2.0, the version in `package.json`. For older releases, read the matching Git tag.
+- These documents describe version 0.2.1, the version in `package.json`. For older releases, read the matching Git tag.
 - The README is maintained in English and [Simplified Chinese](../README.zh-CN.md). Detailed guides are English only; translations are welcome as pull requests.
 - Documents describe the released behavior of the version in `package.json`. A proposal is marked **Proposal** and must not be read as shipped behavior.
 - Internal links are relative and point at files in this repository. External links are limited to the DeepSeek Harness project, Git, npm, and standards bodies.

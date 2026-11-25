@@ -35,6 +35,14 @@ npm pack --dry-run
 
 `verify:release` is the gate: schema freshness, typecheck, build, skill hashes, tests, and the packed-package layout. Inspect the `npm pack --dry-run` file list yourself; the whitelist in `package.json` is the final say on what ships.
 
+When the release touches plugin activation, the Host or Client entry points, or
+packaging, also run the [Host composition smoke](testing.md#4-host-composition-smoke)
+on the packed tarball: boot it in a throwaway profile copied from the shipped
+`web` template, confirm the boot graph entry and the Client registration id, and
+confirm `GET /delivery-loop/api/health` answers instead of `404`. Unit tests run
+against doubles; only this check exercises the real Loader and `webServer`
+lifecycle.
+
 ### Publish to npm
 
 ```bash

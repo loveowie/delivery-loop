@@ -1,6 +1,6 @@
 # Testing
 
-Delivery Loop is tested at four levels: unit and integration tests, static checks, a packed-package check, and a live DSH-hosted delivery. No single level certifies production reliability; the gaps are listed at the end.
+Delivery Loop is tested at five levels: unit and integration tests, static checks, a packed-package check, a Host composition smoke, and a live DSH-hosted delivery. No single level certifies production reliability; the gaps are listed at the end.
 
 ## Commands
 
@@ -37,7 +37,7 @@ npm run verify:release
 | Workspace | Git adapter, worktree manager, snapshots, patch integration and round-trips |
 | Workers | subagent adapter (fake host), timeouts, process supervision |
 | Finalization | modes, provenance, refusal of unsupported modes |
-| DSH integration | manifest, client registration, view token, view service, settings API |
+| DSH integration | manifest, Client module id contract, Host service dependency injection, view token, view service, settings API |
 | Reporting | report writer |
 
 Real-Git tests create temporary repositories, worktrees, snapshots, and patches instead of mocking Git. Tests that need a controller inject an in-process one to keep feedback deterministic.
@@ -68,7 +68,34 @@ npm run verify:skills
 
 `npm run verify:release` runs `npm pack` and inspects the result. It requires the Host and Client entries, locales, icon, schemas, and skill lock, and rejects legacy paths and machine-local files. This catches packaging mistakes that unit tests cannot see.
 
-## 4. Live DSH delivery
+## 4. Host composition smoke
+
+`npm test` runs the Host and Client halves against test doubles. A double is only
+useful when it enforces the same contract as the real Host, so this check boots
+the packed package in a real composition:
+
+```bash
+npm pack --pack-destination /tmp/delivery-smoke
+dsh --profile delivery-smoke --from-default-profile web --dump-config
+HTTPS_PROXY=... dsh plugin --profile delivery-smoke add /tmp/delivery-smoke/dsh-delivery-loop-*.tgz
+dsh --profile delivery-smoke --no-open --port 3099
+```
+
+Then confirm all of the following, and remove the throwaway profile afterwards:
+
+1. the Host log has `[delivery-loop] host plugin ready` and **no**
+   `webServer is unavailable` warning;
+2. the boot graph in `index.html` carries an entry whose `id` is
+   `dsh-delivery-loop`, and the bundle served at that entry's URL registers the
+   same id through `window.__ModuleLoader__.load`;
+3. `GET /delivery-loop/api/health` answers `200` with the browser session or the
+   injected token, and an unknown path under the prefix answers `404`.
+
+This level is what catches activation-order and registration-id defects: they
+live in the seam between the plugin and the Host, so no unit test can see them
+unless its double reproduces the seam.
+
+## 5. Live DSH delivery
 
 A live smoke starts a prepared run from a DSH agent session and waits for completion:
 
@@ -94,7 +121,11 @@ CI does not run a live DSH-hosted delivery, a real container boundary, or a brow
 
 ## What is not covered
 
-These gaps are release risks, not test bugs:
+These gaps are release risks. The two activation defects fixed in 0.2.1 were
+test-double defects rather than contract gaps: the Client double accepted any
+module id, and the Host double supplied `webServer` through `ctx.get` before the
+plugin started. Both doubles now enforce the real contract, and the composition
+smoke in section 4 covers the seam end to end.
 
 - real container isolation (the verification host has no container runtime);
 - provider-specific protocol failures, quotas, and billing limits;
@@ -109,6 +140,11 @@ These gaps are release risks, not test bugs:
 - Put unit tests next to the area they cover under `tests/<area>/`.
 - Use the existing real-Git fixtures rather than mocking Git when the behavior depends on Git.
 - For a bug fix, add a regression test that fails before the fix.
+- A double must model the real contract, not the most convenient one: the Client
+  loader resolves an entry by package name and rejects an unregistered id, and
+  the Host provides sibling services through `ctx.inject` after activation, not
+  through a synchronous `ctx.get` during `apply`. If a double is more generous
+  than the Host, the suite passes and the packed plugin fails.
 - Keep tests deterministic: no wall-clock sleeps, no network, and no dependency on a developer's global Git configuration.
 - Run `npm run verify:release` before opening a pull request that changes runtime behavior, schemas, packaging, or vendored skills.
 

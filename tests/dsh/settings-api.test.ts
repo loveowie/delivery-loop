@@ -30,6 +30,12 @@ function createHarness(): Harness {
       throw new Error('tapIndex must not be used when structured injections are available');
     },
   };
+  const on = (event: string, listener: (table: unknown[]) => void): (() => void) => {
+    assert.equal(event, 'webserver/index-inject');
+    indexListeners.push(listener);
+    return () => {};
+  };
+  const effect = (run: () => (() => void) | void): (() => void) | void => run();
   const ctx = {
     get: (name: string) => {
       if (name === 'agents') return { get: () => undefined, list: () => [] };
@@ -44,12 +50,18 @@ function createHarness(): Harness {
       if (name === 'webServer') return webServer;
       return undefined;
     },
-    on: (event: string, listener: (table: unknown[]) => void) => {
-      assert.equal(event, 'webserver/index-inject');
-      indexListeners.push(listener);
-      return () => {};
+    // The real Host provides `webServer` through the Loader's dependency
+    // injection, so the registration runs inside this callback.
+    inject: (deps: string[], callback: (scope: unknown) => void) => {
+      assert.deepEqual(deps, ['webServer']);
+      callback({
+        get: (name: string) => (name === 'webServer' ? webServer : undefined),
+        on,
+        effect,
+      });
     },
-    effect: (effect: () => (() => void) | void) => effect(),
+    on,
+    effect,
     tools: { register: () => {} },
   };
   apply(ctx as never, {});

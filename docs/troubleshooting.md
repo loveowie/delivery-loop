@@ -7,7 +7,8 @@ Start with the symptom, then collect diagnostics if the quick check does not res
 | Symptom | First check |
 | --- | --- |
 | A `delivery_*` tool is missing | Is the bundle enabled (not only installed)? Did the Host log `host plugin ready`? |
-| The board does not appear | Does the runner compose `webServer`? Is the Client half loaded after a restart? |
+| The board does not appear | Is the installed Client half registering under the package name? Restart after installing 0.2.0 or older |
+| Every view request answers `404` | The routes never registered; on 0.2.0 the Host gave up on `webServer` during activation |
 | The view returns `401` | Reload the page, then restart Desktop if the package changed |
 | `subagent provider "spawn" is not registered` | The composition lacks the spawn provider, or `subagentProvider` names another one |
 | Workers can read but not write | The initiating DSH session lacks workspace write permission |
@@ -26,10 +27,28 @@ Start with the symptom, then collect diagnostics if the quick check does not res
 Check the Host log for `[delivery-loop] host plugin ready (root …, api …)`. Activation failures usually mean a missing seam:
 
 - `tools`, `agents`, and `subagents` are required;
-- the `webServer` service is optional: without it the view does not load runs over HTTP, but tools still work;
+- the `webServer` service is a dependency of the view API: the plugin waits for it with `ctx.inject`, so routes appear once the web carrier is up, and a carrier that never provides it leaves tools working without the HTTP view;
 - the view API is always behind a credential; without a browser session or token injection it rejects requests instead of serving run data
 
 If the bundle was installed but not selected, enable it in **Plugins → Installed**.
+
+### The sidebar entry never appears
+
+The Client half must register its factory under the package name exactly
+(`dsh-delivery-loop`). DSH resolves every boot-graph entry by that name, and a
+bundle that registers another id fails with `loaded without registering
+"dsh-delivery-loop" via __ModuleLoader__.load` and is never bound to its slot.
+Check the browser console for that message; 0.2.0 shipped this defect, so
+upgrade to 0.2.1 and restart the app.
+
+### Every view request answers 404
+
+`404` means the prefix route was never registered, not that a run or file is
+missing. On 0.2.0 the Host read `webServer` synchronously during activation,
+found it absent, and returned, so the API never existed. From 0.2.1 the plugin
+waits for the service with `ctx.inject`. Confirm the Host log has no
+`webServer is unavailable` warning and that the process was restarted after the
+package changed.
 
 ### The view returns 401
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-delivery-loop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Resumable, verifiable end-to-end software delivery for DeepSeek Harness: task graph, subagent workers, independent verification, review, and acceptance",
   "type": "module",
   "private": false,

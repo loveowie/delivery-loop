@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
 
 **Resumable, verifiable end-to-end software delivery for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).**
 
-> Status: 0.2.0, the first public release. Pre-1.0 interfaces may change; see the [changelog](CHANGELOG.md) before upgrading.
+> Status: 0.2.1, the first public release series. Pre-1.0 interfaces may change; see the [changelog](CHANGELOG.md) before upgrading.
 
 Delivery Loop turns an approved specification into a persistent task graph, runs every task in a fresh DSH subagent, verifies the result against a code snapshot, converts test and review failures into repair tasks, and continues until acceptance passes or a human decision is required.
 

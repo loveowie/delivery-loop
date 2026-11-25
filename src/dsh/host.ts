@@ -16,6 +16,16 @@ import type { StartRunInput } from '../runtime/types.js';
 import { recordDecision } from '../controller/decision-journal.js';
 
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// The health payload reports what the installed package declares instead of a
+// hand-maintained copy that drifts on every release.
+const PLUGIN_VERSION = ((): string => {
+  try {
+    const manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'package.json'), 'utf8')) as { version?: unknown };
+    return typeof manifest.version === 'string' ? manifest.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 const DEFAULT_API_PREFIX = '/delivery-loop';
 const MAX_BODY_BYTES = 1_000_000;
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'BLOCKED', 'PAUSED', 'WAITING_HUMAN']);
@@ -279,34 +289,8 @@ function registerWebApi(ctx: any, options: {
   settings: SettingsService;
   token: string;
 }): void {
-  const webServer = ctx.get?.('webServer');
-  if (webServer === undefined || webServer === null) {
-    console.warn('[delivery-loop] webServer is unavailable; the delivery view will not load runs over HTTP.');
-    return;
-  }
   const { config, view, service, settings, token } = options;
   const prefix = config.apiPrefix;
-  // The token must reach the page before the client bundle runs. A structured
-  // `webserver/index-inject` row does that for both carriers: the Web server
-  // renders it into index.html, and the Desktop app receives the same table in
-  // its boot payload. `tapIndex` alone never runs on the Desktop, which loads
-  // the built client from that payload instead of an HTTP index response.
-  const canInjectRow = typeof ctx.on === 'function'
-    && typeof webServer.collectIndexInjections === 'function';
-  if (canInjectRow) {
-    ctx.effect(() => ctx.on('webserver/index-inject', (table: unknown[]) => {
-      table.push({ kind: 'global', name: '__DELIVERY_LOOP_TOKEN__', value: token });
-    }), 'delivery-loop: view token');
-  } else if (typeof webServer.tapIndex === 'function') {
-    ctx.effect(() => webServer.tapIndex((html: string) => html.replace(
-      '</head>',
-      `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
-    )), 'delivery-loop: view token');
-  } else {
-    // The API below still requires either the DSH browser session or the
-    // token, so registering it without an injection path cannot expose data.
-    console.warn('[delivery-loop] no view-token injection path; the token fallback is unavailable.');
-  }
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // DSH's browser session is the primary credential: the Web page sends its
     // cookie, and the Desktop app forwards the same Host cookie on every plugin
@@ -331,7 +315,7 @@ function registerWebApi(ctx: any, options: {
     const runId = url.searchParams.get('run_id') ?? undefined;
     try {
       if (req.method === 'GET' && (sub === '' || sub === 'health')) {
-        json(res, 200, { ok: true, plugin: 'delivery-loop', version: '0.2.0', prefix });
+        json(res, 200, { ok: true, plugin: 'delivery-loop', version: PLUGIN_VERSION, prefix });
         return;
       }
       if (req.method === 'GET' && sub === 'runs') {
@@ -438,11 +422,54 @@ function registerWebApi(ctx: any, options: {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   };
-  ctx.effect(() => webServer.register({
-    kind: 'prefix',
-    path: prefix,
-    handler,
-  }), 'delivery-loop: web api');
+  // `webServer` belongs to a sibling plugin, so it is normally still absent
+  // while this plugin's `apply` runs. A synchronous `ctx.get` would return
+  // undefined and drop the API for the life of the process; declaring the
+  // dependency defers registration until the service exists and disposes the
+  // routes and listeners with it. DSH's own Host plugins obtain `webServer`
+  // this way.
+  const register = (scope: any): void => {
+    const webServer = scope.get?.('webServer') ?? scope.webServer;
+    if (webServer === undefined || webServer === null) {
+      console.warn('[delivery-loop] webServer is unavailable; the delivery view will not load runs over HTTP.');
+      return;
+    }
+    // The token must reach the page before the client bundle runs. A structured
+    // `webserver/index-inject` row does that for both carriers: the Web server
+    // renders it into index.html, and the Desktop app receives the same table in
+    // its boot payload. `tapIndex` alone never runs on the Desktop, which loads
+    // the built client from that payload instead of an HTTP index response.
+    const canInjectRow = typeof scope.on === 'function'
+      && typeof webServer.collectIndexInjections === 'function';
+    if (canInjectRow) {
+      scope.effect(() => scope.on('webserver/index-inject', (table: unknown[]) => {
+        table.push({ kind: 'global', name: '__DELIVERY_LOOP_TOKEN__', value: token });
+      }), 'delivery-loop: view token');
+    } else if (typeof webServer.tapIndex === 'function') {
+      scope.effect(() => webServer.tapIndex((html: string) => html.replace(
+        '</head>',
+        `<script>window.__DELIVERY_LOOP_TOKEN__ = ${JSON.stringify(token)};</script></head>`,
+      )), 'delivery-loop: view token');
+    } else {
+      // The API below still requires either the DSH browser session or the
+      // token, so registering it without an injection path cannot expose data.
+      console.warn('[delivery-loop] no view-token injection path; the token fallback is unavailable.');
+    }
+    scope.effect(() => webServer.register({
+      kind: 'prefix',
+      path: prefix,
+      handler,
+    }), 'delivery-loop: web api');
+  };
+  if (typeof ctx.inject === 'function') {
+    // The callback runs once `webServer` is provided, and runs again with a
+    // fresh scope if the carrier is replaced.
+    ctx.inject(['webServer'], register);
+    return;
+  }
+  // A Host context without `inject` can only be served when the service is
+  // already up; keep that working instead of leaving the view without an API.
+  register(ctx);
 }
 
 export interface ParentAgentService {
